@@ -16,8 +16,6 @@ await fs.mkdir(QUERY_DIR, { recursive: true })
 const DOWNLOADS_DIR = path.join(TMP_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true })
 
-console.log('DOWNLOADS_DIR', DOWNLOADS_DIR)
-
 const CONCURRENCY = 4
 
 const userAgent = new UserAgent({ deviceCategory: 'desktop' })
