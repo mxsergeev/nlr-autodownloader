@@ -3,7 +3,7 @@ import { startExistingQueries } from './services/playwright.service.js'
 
 const port = process.env.SERVER_PORT || 3333
 
-// Start resuming existing queries in background so server startup isn't blocked
+// Resume existing queries in the background
 startExistingQueries().catch((err) => console.error('Error resuming queries:', err))
 
 app.listen(port, () => {
