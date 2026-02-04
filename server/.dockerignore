@@ -1,0 +1,11 @@
+node_modules
+tmp
+*.log
+*.cache
+.env
+.playwright
+playwright-report
+test-results
+.vscode
+.DS_Store
+.git

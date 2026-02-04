@@ -1,0 +1,71 @@
+# Node / package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp.*
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+lib/
+*.tsbuildinfo
+
+# Vite / React
+.vite/
+.vite/deps/
+.cache/
+.env
+.env.*.local
+!.env.example
+
+# Express / server artifacts
+logs/
+*.log
+pids/
+*.pid
+*.seed
+
+# Playwright
+.playwright/
+test-results/
+playwright-report/
+playwright-report.zip
+screenshots/
+videos/
+traces/
+
+# Tests / coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Docker
+.docker/
+docker-compose.override.yml
+docker-compose.*.local.yml
+**/.env
+.env.docker
+.env.*.docker
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Security / keys
+*.pem
+*.key
+
+tmp/

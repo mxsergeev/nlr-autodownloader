@@ -1,0 +1,14 @@
+services:
+  server:
+    build: ./server
+    env_file:
+      - .env
+    ports:
+      - "${SERVER_PORT:-3333}:3333"
+    volumes:
+      - ./server/:/app
+      - /app/node_modules
+      - .env:/.env:ro
+      - ${DOWNLOADS_DIR:-./server/tmp/downloads}:/app/tmp/downloads:shared
+    restart: unless-stopped
+    command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
