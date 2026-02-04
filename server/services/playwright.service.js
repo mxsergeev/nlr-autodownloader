@@ -12,7 +12,6 @@ await fs.mkdir(TMP_DIR, { recursive: true })
 const QUERY_DIR = path.join(TMP_DIR, 'queries')
 await fs.mkdir(QUERY_DIR, { recursive: true })
 
-// const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || path.join(TMP_DIR, 'downloads')
 const DOWNLOADS_DIR = path.join(TMP_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true })
 
@@ -240,27 +239,6 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
 
       const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.part${curPart}.json`)
       await fs.writeFile(outputPath, JSON.stringify(part, null, 2))
-
-      // if (curPart < metadata.parts) {
-      //   // Get the first item's href before clicking to detect when DOM updates
-      //   const firstItemHref = await page.locator('.item-title a').first().getAttribute('href')
-
-      //   console.log('firstItemHref', firstItemHref)
-
-      //   await page.getByRole('link', { name: 'Загрузить больше результатов?' }, { timeout: 15000 }).click()
-
-      //   // Wait for the DOM to update by checking if the first item changed
-      //   await page.waitForFunction(
-      //     (oldHref) => {
-      //       // eslint-disable-next-line no-undef
-      //       const firstAnchor = document.querySelector('.item-title a')
-      //       console.log('firstAnchor href', firstAnchor ? firstAnchor.getAttribute('href') : null)
-      //       return firstAnchor && firstAnchor.getAttribute('href') !== oldHref
-      //     },
-      //     firstItemHref,
-      //     { timeout: 15000 },
-      //   )
-      // }
     }
   })
 }
