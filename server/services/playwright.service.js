@@ -562,7 +562,12 @@ async function scrapDownload(item, storageDir) {
 
 async function getDownloadedFileNames(params) {
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
-  return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name))
+  try {
+    return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name))
+  } catch (err) {
+    if (err.code === 'ENOENT') return new Set()
+    throw err
+  }
 }
 
 function verifyDownloads(downloads = new Set(), searchResults) {
