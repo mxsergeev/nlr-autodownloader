@@ -15,7 +15,7 @@ await fs.mkdir(QUERY_DIR, { recursive: true })
 const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true })
 
-const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10)
+const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10) || 1
 
 let browser
 
@@ -107,12 +107,42 @@ async function startExistingQueries() {
   let queriesCount = metadataList.length
 
   while (queriesCount > 0) {
-    await Promise.all(
-      metadataList.splice(0, CONCURRENT_DOWNLOADS).map(async (metadata) => {
+    // Process all current queries with a concurrency limit so when one finishes we immediately
+    // start the next one instead of waiting for the whole batch to complete.
+
+    // Take a snapshot of the current queue
+    const queue = metadataList.splice(0)
+    const active = new Set()
+
+    const startTask = async (metadata) => {
+      try {
         console.log(`[${queryToString(metadata.query)}] Starting`)
         await download(metadata.query)
-      }),
-    )
+      } catch (err) {
+        console.error(`[${queryToString(metadata.query)}] Error:`, err.message)
+      }
+    }
+
+    let idx = 0
+
+    // Start initial workers
+    for (; idx < CONCURRENT_DOWNLOADS && idx < queue.length; idx++) {
+      const metadata = queue[idx]
+      const p = startTask(metadata).finally(() => active.delete(p))
+      active.add(p)
+    }
+
+    // Whenever a worker finishes, start a new one until queue is exhausted
+    while (idx < queue.length) {
+      // Wait for any active promise to finish
+      await Promise.race(active)
+      const metadata = queue[idx++]
+      const p = startTask(metadata).finally(() => active.delete(p))
+      active.add(p)
+    }
+
+    // Wait for remaining active tasks to finish
+    await Promise.all(active)
 
     metadataList = await loadQueriesMetadata()
     queriesCount = metadataList.length
