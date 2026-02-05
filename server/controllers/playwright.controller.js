@@ -33,8 +33,8 @@ router.post('/queue', async (req, res) => {
       .filter(Boolean)
 
     const qsResults = await Promise.allSettled(
-      qs.map((q) =>
-        queueQuery(q).catch((err) => {
+      qs.map((q, index) =>
+        queueQuery(q, { order: index }).catch((err) => {
           throw Object.assign(err, { query: q })
         }),
       ),

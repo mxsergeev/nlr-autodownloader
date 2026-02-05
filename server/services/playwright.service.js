@@ -97,7 +97,7 @@ export async function loadQueriesMetadata() {
   }
 
   // Sort by creation date, oldest first
-  results.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+  results.sort((a, b) => a.order - b.order)
 
   return results
 }
@@ -241,7 +241,8 @@ async function loadMetadata(params) {
   try {
     const metadata = await scrapMetadata(params)
 
-    metadata.createdAt = new Date().toISOString()
+    metadata.createdAt = existingMetadata?.createdAt ?? new Date().toISOString()
+    metadata.order = existingMetadata?.order ?? Date.now()
     metadata.status = 'pending'
 
     await writeMetadata(params, metadata)
@@ -262,7 +263,7 @@ async function loadMetadata(params) {
  * Queue a query without performing heavy scraping now.
  * Creates a minimal metadata file with status 'pending' so the query is resumed on server start or by the watcher.
  */
-export async function queueQuery(params) {
+export async function queueQuery(params, { order = 0 } = {}) {
   const existing = await readMetadata(params)
   if (existing) return existing
 
@@ -273,6 +274,7 @@ export async function queueQuery(params) {
     parts: null,
     pageUrl: null,
     createdAt: new Date().toISOString(),
+    order: Date.now() + order,
     status: 'pending',
   }
 
@@ -283,9 +285,7 @@ export async function queueQuery(params) {
 async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls = new Set() } = {}) {
   const metadata = await loadMetadata(params)
 
-  console.log(
-    `[${queryToString(params)}] Scraping search results: expected results ${metadata.results}, parts: ${metadata.parts}`,
-  )
+  console.log(`[${queryToString(params)}] Scraping search results for ${metadata.results} documents`)
 
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls)
