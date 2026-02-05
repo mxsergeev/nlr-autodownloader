@@ -5,6 +5,7 @@ services:
       - .env
     ports:
       - "${SERVER_PORT:-3333}:3333"
+    user: ${UID:-1000}:${GID:-1000}
     volumes:
       - ./server/:/app
       - /app/node_modules
