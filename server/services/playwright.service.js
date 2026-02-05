@@ -49,7 +49,7 @@ async function stopBrowser() {
   browser = undefined
 }
 
-export async function runJob(fn) {
+async function runJob(fn) {
   if (!browser || !browser.isConnected()) await startBrowser()
 
   let context
@@ -90,7 +90,7 @@ export async function loadQueriesMetadata() {
     const metaFilePath = path.join(dirPath, metaFile.name)
     try {
       const metadata = JSON.parse(await fs.readFile(metaFilePath, 'utf-8'))
-      results.push({ dir: dir.name, metadata })
+      results.push(metadata)
     } catch (err) {
       console.warn(`Failed to read metadata for ${dir.name}:`, err.message)
     }
@@ -99,18 +99,18 @@ export async function loadQueriesMetadata() {
   return results
 }
 
-export async function startExistingQueries() {
+async function startExistingQueries() {
   let metadataList = await loadQueriesMetadata()
   let queriesCount = metadataList.length
 
   while (queriesCount > 0) {
     await Promise.all(
-      metadataList.splice(0, CONCURRENT_DOWNLOADS).map(async ({ dir, metadata }) => {
-        console.log(`Resuming query in ${dir} with parameters:`, metadata.query)
+      metadataList.splice(0, CONCURRENT_DOWNLOADS).map(async (metadata) => {
+        console.log(`Resuming query:`, queryToString(metadata.query))
         try {
           await download(metadata.query)
         } catch (err) {
-          console.error(`Error resuming query in ${dir}:`, err)
+          console.error(`Error resuming query ${queryToString(metadata.query)}:`, err)
         }
       }),
     )
@@ -120,7 +120,47 @@ export async function startExistingQueries() {
   }
 }
 
+// Interval-based watcher for new queries
+let queryWatcherIntervalId = null
+let queryWatcherRunning = false
+const QUERY_WATCHER_INTERVAL = parseInt(process.env.QUERY_WATCHER_INTERVAL || '60000', 10)
+
+/**
+ * Start a background watcher that periodically checks for new queries and resumes them.
+ * intervalMs - milliseconds between checks (default from QUERY_WATCHER_INTERVAL env var)
+ */
+export function startQueryWatcher(intervalMs = QUERY_WATCHER_INTERVAL) {
+  if (queryWatcherIntervalId) return
+
+  async function checkForQueries() {
+    if (queryWatcherRunning) return
+    queryWatcherRunning = true
+    try {
+      await startExistingQueries()
+    } catch (err) {
+      console.error('Error while checking for new queries:', err)
+    } finally {
+      queryWatcherRunning = false
+    }
+  }
+
+  // Run immediately, then periodically
+  checkForQueries()
+  queryWatcherIntervalId = setInterval(checkForQueries, intervalMs)
+  console.log(`Query watcher started (interval: ${intervalMs}ms)`)
+}
+
+export function stopQueryWatcher() {
+  if (!queryWatcherIntervalId) return
+  clearInterval(queryWatcherIntervalId)
+  queryWatcherIntervalId = null
+  queryWatcherRunning = false
+  console.log('Query watcher stopped')
+}
+
 async function scrapMetadata(params) {
+  console.log(`[${queryToString(params)}] Scraping metadata`)
+
   return runJob(async (page) => {
     await page.goto('https://primo.nlr.ru/')
 
@@ -140,7 +180,12 @@ async function scrapMetadata(params) {
 
     await page.getByRole('button', { name: 'Отправить поиск' }).click()
 
-    await page.getByRole('button', { name: 'Сортировать по Релевантность' }).click()
+    await page
+      .getByRole('button', { name: 'Сортировать по Релевантность' })
+      .click({ timeout: 5000 })
+      .catch(() => {
+        throw new Error('No results found for the given search criteria.')
+      })
     await page.getByRole('option', { name: 'Дата выхода периодики (по возр.)' }).click()
 
     await page.waitForSelector('.item-title', { timeout: 15000 }).catch(() => {
@@ -171,38 +216,87 @@ async function scrapMetadata(params) {
   })
 }
 
-async function loadMetadata(params) {
-  const existingMetadata = await fs
-    .readFile(path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`), 'utf-8')
-    .catch(() => null)
-
-  if (existingMetadata) {
-    return JSON.parse(existingMetadata)
-  }
-
-  const metadata = await scrapMetadata(params)
-
+async function writeMetadata(params, metadata) {
+  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true })
   const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
   await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2))
+}
 
+async function readMetadata(params) {
+  try {
+    const metadataPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
+    const metadataContent = await fs.readFile(metadataPath, 'utf-8')
+    return JSON.parse(metadataContent)
+  } catch {
+    return null
+  }
+}
+
+async function loadMetadata(params) {
+  const existingMetadata = await readMetadata(params)
+
+  if (existingMetadata && existingMetadata.results !== null) {
+    return existingMetadata
+  }
+
+  try {
+    const metadata = await scrapMetadata(params)
+
+    metadata.createdAt = new Date().toISOString()
+    metadata.status = 'pending'
+
+    await writeMetadata(params, metadata)
+
+    return metadata
+  } catch (err) {
+    if (existingMetadata && err.message.includes('No results found')) {
+      console.warn(`[${queryToString(params)}] No results found, removing query.`)
+
+      await removeQuery(params)
+
+      throw new Error(err)
+    }
+  }
+}
+
+/**
+ * Queue a query without performing heavy scraping now.
+ * Creates a minimal metadata file with status 'pending' so the query is resumed on server start or by the watcher.
+ */
+export async function queueQuery(params) {
+  const existing = await readMetadata(params)
+  if (existing) return existing
+
+  const metadata = {
+    query: params,
+    results: null,
+    resultsPerPart: null,
+    parts: null,
+    pageUrl: null,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+  }
+
+  await writeMetadata(params, metadata)
   return metadata
 }
 
 async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls = new Set() } = {}) {
   const metadata = await loadMetadata(params)
 
+  console.log(
+    `[${queryToString(params)}] Scraping search results: expected results ${metadata.results}, parts: ${metadata.parts}`,
+  )
+
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls)
 
     for (let curPart = 1; curPart <= metadata.parts; curPart++) {
       if (doneParts.has(curPart)) {
-        console.log(`Skipping already done part ${curPart}`)
         continue
       }
 
       await page.goto(metadata.pageUrl.replace(/offset=\d+/, `offset=${(curPart - 1) * metadata.resultsPerPart}`))
-
-      console.log(`Processing part ${curPart} of ${metadata.parts}`)
 
       const part = []
 
@@ -273,8 +367,19 @@ async function getPartFileNames(params) {
 }
 
 function verifySearchResults(results, metadata) {
+  const isFresh = metadata.createdAt && new Date(metadata.createdAt) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+
+  if (!isFresh) {
+    console.warn(
+      `[${queryToString(metadata.query)}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
+    )
+    return false
+  }
+
   if (results.length !== metadata.results) {
-    console.warn(`Warning: Expected ${metadata.results} results, but got ${results.length}.`)
+    console.warn(
+      `[${queryToString(metadata.query)}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
+    )
     return false
   }
 
@@ -290,11 +395,12 @@ function verifySearchResults(results, metadata) {
   }
 
   if (duplicates.length > 0) {
-    console.warn(`Warning: Found ${duplicates.length} duplicate items in the results.`)
+    console.warn(
+      `[${queryToString(metadata.query)}] Warning: Found ${duplicates.length} duplicate items in the results.`,
+    )
     return false
   }
 
-  console.log('All search results have passed verification.')
   return true
 }
 
@@ -303,7 +409,7 @@ async function removeQuery(params) {
   await fs.rm(dir, { recursive: true, force: true })
 }
 
-export async function loadSearchResults(params = {}, { override = false } = {}) {
+async function loadSearchResults(params = {}, { override = false } = {}) {
   if (Object.keys(params).length === 0) {
     throw new Error('No search parameters provided.')
   }
@@ -316,7 +422,6 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
 
   if (searchResults && searchResults.length > 0) {
     const metadata = await loadMetadata(params)
-    console.log(`Search results for ${queryToString(params)} already exist. Skipping fetch.`)
 
     if (verifySearchResults(searchResults, metadata)) {
       return searchResults
@@ -401,13 +506,13 @@ async function scrapDownload(item, storageDir) {
       await page1.locator('#btn-download').click()
 
       // Set up event listeners before clicking, but don't await yet
-      const page2Promise = page1.waitForEvent('popup', { timeout: 15000 }).catch(() => {})
-      const downloadPromise = page1.waitForEvent('download', { timeout: 15000 }).catch(() => {})
+      const page2Promise = page1.waitForEvent('popup', { timeout: 30000 }).catch(() => {})
+      const downloadPromise = page1.waitForEvent('download', { timeout: 30000 }).catch(() => {})
 
       await page1
         .getByLabel('Загрузка всего документа')
         .getByRole('link', { name: 'Скачать' })
-        .click({ timeout: 15000 })
+        .click({ timeout: 30000 })
 
       page2 = await page2Promise
       const file = await downloadPromise
@@ -415,8 +520,8 @@ async function scrapDownload(item, storageDir) {
       const fileName = sanitizeFileName(item.fileName)
       const filePath = path.join(storageDir, `${fileName}.pdf`)
       await file.saveAs(filePath)
-    } catch (err) {
-      throw new Error(`Scraping failed for item: ${item.fileName}. Reason: ${err.message}`)
+    } catch {
+      throw new Error('Download blocked')
     } finally {
       // Clean up opened pages to prevent lingering promises
       if (page2) await page2.close()
@@ -436,7 +541,7 @@ function verifyDownloads(downloads = new Set(), searchResults) {
   return { missingFiles }
 }
 
-export async function download(params = {}) {
+async function download(params = {}) {
   const searchResults = await loadSearchResults(params)
 
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
@@ -445,15 +550,8 @@ export async function download(params = {}) {
   let fails = 0
 
   while (fails < 10) {
-    const downloads = await getDownloadedFileNames(params)
-    const { missingFiles } = verifyDownloads(downloads, searchResults)
-
-    console.log('----------------------------------------')
-    console.log('Query:', queryToString(params))
-    console.log(`Status: ${downloads.size} / ${searchResults.length}`)
-    console.log(
-      `Progress: ${(((searchResults.length - missingFiles.length) / searchResults.length) * 100).toFixed(2)}%`,
-    )
+    let downloads = await getDownloadedFileNames(params)
+    let { missingFiles } = verifyDownloads(downloads, searchResults)
 
     if (missingFiles.length === 0) {
       break
@@ -463,12 +561,28 @@ export async function download(params = {}) {
       try {
         await scrapDownload(item, storageDir)
 
-        console.log(`Downloaded: ${item.fileName}`)
+        console.log(`[${queryToString(params)}] Downloaded: ${item.fileName}`)
+
+        downloads = await getDownloadedFileNames(params)
+        missingFiles = verifyDownloads(downloads, searchResults).missingFiles
+
+        const metadata = await readMetadata(params)
+
+        metadata.status = 'downloading'
+        metadata.downloaded = downloads.size
+        metadata.downloadProgress =
+          parseFloat((((metadata.results - missingFiles.length) / metadata.results) * 100).toFixed(2)) + '%'
+        metadata.lastAttempt = new Date().toISOString()
+
+        console.log(
+          `[${queryToString(params)}] Progress: ${downloads.size} / ${metadata.results} (${metadata.downloadProgress})`,
+        )
+
+        await writeMetadata(params, metadata)
       } catch (err) {
         fails += 1
 
-        console.error(`Failed to download: ${item.fileName}. Reason: ${err.message}`)
-
+        console.error(`[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`)
         break
       }
     }
@@ -479,13 +593,11 @@ export async function download(params = {}) {
   let msg = ''
 
   if (missingFiles.length > 0) {
-    msg = `Failed to download ${missingFiles.length} items after multiple attempts. Missing files: ${missingFiles
-      .map((f) => f.fileName)
-      .join(', ')}`
+    msg = `[${queryToString(params)}] Failed to download ${missingFiles.length} items after multiple attempts.}`
 
     console.warn(msg)
   } else {
-    msg = 'All items downloaded successfully.'
+    msg = `[${queryToString(params)}] All items downloaded successfully.`
 
     await removeQuery(params)
 

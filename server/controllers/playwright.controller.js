@@ -1,36 +1,52 @@
 import express from 'express'
-import { download, loadSearchResults } from '../services/playwright.service.js'
+import { loadQueriesMetadata, queueQuery } from '../services/playwright.service.js'
 
 const router = express.Router()
 
-router.get('/download', async (req, res) => {
+router.get('/queue', async (req, res) => {
   try {
-    const { q, year } = req.query
+    const queue = await loadQueriesMetadata()
 
-    const result = await download({ q: decodeURIComponent(q), year })
-
-    res.json({ result })
+    res.json({ queue })
   } catch (error) {
-    console.error('Download error:', error)
+    console.error('Queue retrieval error:', error)
     res.status(500).json({
-      error: 'Download failed',
+      error: 'Failed to retrieve queue',
       message: error.message,
       name: error.name,
     })
   }
 })
 
-router.get('/search', async (req, res) => {
+router.post('/queue', async (req, res) => {
   try {
-    const { q, year } = req.query
+    const { queries = [] } = req.body
 
-    const result = await loadSearchResults({ q: decodeURIComponent(q), year })
+    const qs = queries
+      .map((q) => {
+        if (!q.q || !q.year) {
+          return null
+        }
 
-    res.json({ result })
+        return { q: q.q, year: q.year }
+      })
+      .filter(Boolean)
+
+    const qsResults = await Promise.allSettled(
+      qs.map((q) =>
+        queueQuery(q).catch((err) => {
+          throw Object.assign(err, { query: q })
+        }),
+      ),
+    )
+
+    const queue = await loadQueriesMetadata()
+
+    res.json({ failed: qsResults.filter((r) => r.status === 'rejected').map((r) => r.reason), queue })
   } catch (error) {
-    console.error('Search error:', error)
+    console.error('Queue error:', error)
     res.status(500).json({
-      error: 'Search failed',
+      error: 'Queueing failed',
       message: error.message,
       name: error.name,
     })
