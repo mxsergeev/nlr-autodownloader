@@ -512,6 +512,9 @@ async function scrapDownload(item, storageDir) {
         .getByLabel('Загрузка всего документа')
         .getByRole('link', { name: 'Скачать' })
         .click({ timeout: 30000 })
+        .catch(() => {
+          throw new Error('Download blocked')
+        })
 
       page2 = await page2Promise
       const file = await downloadPromise
@@ -519,8 +522,6 @@ async function scrapDownload(item, storageDir) {
       const fileName = sanitizeFileName(item.fileName)
       const filePath = path.join(storageDir, `${fileName}.pdf`)
       await file.saveAs(filePath)
-    } catch {
-      throw new Error('Download blocked')
     } finally {
       // Clean up opened pages to prevent lingering promises
       if (page2) await page2.close()
