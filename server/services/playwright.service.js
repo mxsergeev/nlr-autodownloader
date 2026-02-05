@@ -96,6 +96,9 @@ export async function loadQueriesMetadata() {
     }
   }
 
+  // Sort by creation date, oldest first
+  results.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+
   return results
 }
 
