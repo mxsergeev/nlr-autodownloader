@@ -106,12 +106,8 @@ async function startExistingQueries() {
   while (queriesCount > 0) {
     await Promise.all(
       metadataList.splice(0, CONCURRENT_DOWNLOADS).map(async (metadata) => {
-        console.log(`Resuming query:`, queryToString(metadata.query))
-        try {
-          await download(metadata.query)
-        } catch (err) {
-          console.error(`Error resuming query ${queryToString(metadata.query)}:`, err)
-        }
+        console.log(`[${queryToString(metadata.query)}] Starting`)
+        await download(metadata.query)
       }),
     )
 
