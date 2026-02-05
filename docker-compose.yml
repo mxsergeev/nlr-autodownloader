@@ -1,15 +1,22 @@
 services:
   server:
-    build: ./server
+    build:
+      context: ./server
+    user: "${UID}:${GID}"
+    group_add:
+      - "${NEXTCLOUD_GID}"
     env_file:
       - .env
     ports:
       - "${SERVER_PORT:-3333}:3333"
-    user: ${UID:-1000}:${GID:-1000}
     volumes:
       - ./server/:/app
       - /app/node_modules
       - .env:/.env:ro
-      - ${DOWNLOADS_DIR:-./server/tmp/downloads}:/app/tmp/downloads:shared
+      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
+      - queries_data:/data/queries
     restart: unless-stopped
     command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
+
+volumes:
+  queries_data:

@@ -6,18 +6,16 @@ import UserAgent from 'user-agents'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const TMP_DIR = path.join(__dirname, '..', 'tmp')
-await fs.mkdir(TMP_DIR, { recursive: true })
+const DATA_DIR = path.join(__dirname, '..', '..', 'data')
+await fs.mkdir(DATA_DIR, { recursive: true })
 
-const QUERY_DIR = path.join(TMP_DIR, 'queries')
+const QUERY_DIR = path.join(DATA_DIR, 'queries')
 await fs.mkdir(QUERY_DIR, { recursive: true })
 
-const DOWNLOADS_DIR = path.join(TMP_DIR, 'downloads')
+const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true })
 
-const CONCURRENCY = 4
-
-const userAgent = new UserAgent({ deviceCategory: 'desktop' })
+const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10)
 
 let browser
 
@@ -55,6 +53,8 @@ export async function runJob(fn) {
   if (!browser || !browser.isConnected()) await startBrowser()
 
   let context
+
+  const userAgent = new UserAgent({ deviceCategory: 'desktop' })
 
   try {
     context = await browser.newContext(userAgent)
@@ -105,7 +105,7 @@ export async function startExistingQueries() {
 
   while (queriesCount > 0) {
     await Promise.all(
-      metadataList.splice(0, CONCURRENCY).map(async ({ dir, metadata }) => {
+      metadataList.splice(0, CONCURRENT_DOWNLOADS).map(async ({ dir, metadata }) => {
         console.log(`Resuming query in ${dir} with parameters:`, metadata.query)
         try {
           await download(metadata.query)
