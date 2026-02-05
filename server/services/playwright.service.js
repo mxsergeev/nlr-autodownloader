@@ -57,12 +57,12 @@ async function runJob(fn) {
   const userAgent = new UserAgent({ deviceCategory: 'desktop' })
 
   try {
-    context = await browser.newContext(userAgent)
+    context = await browser.newContext({ userAgent: userAgent.toString() })
   } catch {
     // try restarting once
     await stopBrowser()
     await startBrowser()
-    context = await browser.newContext(userAgent)
+    context = await browser.newContext({ userAgent: userAgent.toString() })
   }
 
   const page = await context.newPage()
