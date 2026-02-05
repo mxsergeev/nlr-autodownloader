@@ -598,10 +598,11 @@ async function download(params = {}) {
 
         const metadata = await readMetadata(params)
 
+        const total = metadata.results || 1
+
         metadata.status = 'downloading'
         metadata.downloaded = downloads.size
-        metadata.downloadProgress =
-          parseFloat((((metadata.results - missingFiles.length) / metadata.results) * 100).toFixed(2)) + '%'
+        metadata.downloadProgress = parseFloat((((total - missingFiles.length) / total) * 100).toFixed(2)) + '%'
         metadata.lastAttempt = new Date().toISOString()
 
         console.log(
