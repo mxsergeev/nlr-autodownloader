@@ -2,9 +2,8 @@ services:
   server:
     build:
       context: ./server
-    user: "${UID}:${GID}"
     group_add:
-      - "${NEXTCLOUD_GID}"
+      - "${NEXTCLOUD_GID:-33}"
     env_file:
       - .env
     ports:

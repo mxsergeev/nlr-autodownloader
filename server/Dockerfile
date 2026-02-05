@@ -16,7 +16,9 @@ ENV LC_ALL=en_US.UTF-8
 
 
 RUN mkdir -p /data/queries /data/downloads && \
-    chown -R node:node /app /data 
+    chown -R node:node /app /data
+    
+RUN usermod -g 0 node
 
 USER node
 
