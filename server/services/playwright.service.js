@@ -582,9 +582,22 @@ async function download(params = {}) {
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
   await fs.mkdir(storageDir, { recursive: true })
 
-  let fails = 0
+  // Track failure timestamps and abort only if 10 failures occur within the last 5 minutes
+  const FAILURE_WINDOW_MS = 5 * 60 * 1000
+  let failTimestamps = []
 
-  while (fails < 10) {
+  while (true) {
+    const now = Date.now()
+    // Keep only failures within the sliding 5-minute window
+    failTimestamps = failTimestamps.filter((t) => now - t <= FAILURE_WINDOW_MS)
+
+    if (failTimestamps.length >= 10) {
+      console.warn(
+        `[${queryToString(params)}] Aborting downloads: ${failTimestamps.length} failures within the last ${FAILURE_WINDOW_MS / 60000} minutes.`,
+      )
+      break
+    }
+
     let downloads = await getDownloadedFileNames(params)
     let { missingFiles } = verifyDownloads(downloads, searchResults)
 
@@ -613,12 +626,13 @@ async function download(params = {}) {
         console.log(
           `[${queryToString(params)}] Progress: ${downloads.size} / ${metadata.results} (${metadata.downloadProgress})`,
         )
-
-        await writeMetadata(params, metadata)
       } catch (err) {
-        fails += 1
+        // Record failure timestamp and log
+        failTimestamps.push(Date.now())
 
-        console.error(`[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`)
+        console.error(
+          `[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`,
+        )
         break
       }
     }
