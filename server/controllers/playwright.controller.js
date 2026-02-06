@@ -22,6 +22,10 @@ router.post('/queue', async (req, res) => {
   try {
     const { queries = [] } = req.body
 
+    if (queries.length === 0) {
+      return res.status(400).json({ error: 'No queries provided' })
+    }
+
     const qs = queries
       .map((q) => {
         if (!q.q || !q.year) {
