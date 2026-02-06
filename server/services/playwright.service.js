@@ -606,6 +606,9 @@ async function download(params = {}) {
     }
 
     for (const item of missingFiles) {
+      const metadata = await readMetadata(params)
+      metadata.lastAttempt = new Date().toISOString()
+
       try {
         await scrapDownload(item, storageDir)
 
@@ -614,14 +617,11 @@ async function download(params = {}) {
         downloads = await getDownloadedFileNames(params)
         missingFiles = verifyDownloads(downloads, searchResults).missingFiles
 
-        const metadata = await readMetadata(params)
-
         const total = metadata.results || 1
 
         metadata.status = 'downloading'
         metadata.downloaded = downloads.size
         metadata.downloadProgress = parseFloat((((total - missingFiles.length) / total) * 100).toFixed(2)) + '%'
-        metadata.lastAttempt = new Date().toISOString()
 
         console.log(
           `[${queryToString(params)}] Progress: ${downloads.size} / ${metadata.results} (${metadata.downloadProgress})`,
@@ -633,7 +633,12 @@ async function download(params = {}) {
         console.error(
           `[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`,
         )
+
+        metadata.status = 'error'
+
         break
+      } finally {
+        await writeMetadata(params, metadata)
       }
     }
   }
