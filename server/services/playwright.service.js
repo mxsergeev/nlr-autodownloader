@@ -103,12 +103,12 @@ export async function loadQueriesMetadata() {
 }
 
 async function startExistingQueries() {
-  let metadataList = await loadQueriesMetadata()
+  let metadataList = (await loadQueriesMetadata()).filter((m) => m.status !== 'search_failed')
   let queriesCount = metadataList.length
 
   // Ensure all queries are marked as 'pending' before starting downloads
   for (const meta of metadataList) {
-    if (meta.status === 'pending' ) {
+    if (meta.status === 'pending') {
       continue
     }
 
@@ -158,7 +158,7 @@ async function startExistingQueries() {
     // Wait for remaining active tasks to finish
     await Promise.all(active)
 
-    metadataList = await loadQueriesMetadata()
+    metadataList = (await loadQueriesMetadata()).filter((m) => m.status !== 'search_failed')
     queriesCount = metadataList.length
   }
 }
@@ -262,7 +262,14 @@ async function generateDownloadsReport() {
 
     if (!meta) {
       // No metadata -> completed. Report actual downloaded file count and mark as completed.
-      rows.push({ name: dirName, status: 'completed', downloaded, total: downloaded, progress: '100%', order: Number.MAX_SAFE_INTEGER })
+      rows.push({
+        name: dirName,
+        status: 'completed',
+        downloaded,
+        total: downloaded,
+        progress: '100%',
+        order: Number.MAX_SAFE_INTEGER,
+      })
       continue
     }
 
@@ -306,9 +313,7 @@ async function generateDownloadsReport() {
   })
 
   const header = `# Downloads report\n\nGenerated at: ${new Date().toISOString()}\n\n`
-  const lines = rows
-    .map((r) => `${r.name} | ${r.status} | ${r.downloaded}/${r.total} | ${r.progress}`)
-    .join('\n')
+  const lines = rows.map((r) => `${r.name} | ${r.status} | ${r.downloaded}/${r.total} | ${r.progress}`).join('\n')
 
   const content = header + lines + '\n'
 
@@ -351,7 +356,9 @@ async function scrapMetadata(params) {
     await page.getByRole('button', { name: 'Выберите точную операцию для сложного номера строки 2 совпадает' }).click()
     await page.getByRole('option', { name: 'совпадает' }).click()
     await page.getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 2' }).click()
-    await page.getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 2' }).fill(params.year)
+    await page
+      .getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 2' })
+      .fill(params.year.toString())
 
     await page.getByRole('button', { name: 'Отправить поиск' }).click()
 
@@ -429,9 +436,9 @@ async function loadMetadata(params) {
       console.warn(`[${queryToString(params)}] No results found, removing query.`)
 
       await removeQuery(params)
-
-      throw new Error(err)
     }
+
+    throw new Error(err)
   }
 }
 
@@ -441,7 +448,7 @@ async function loadMetadata(params) {
  */
 export async function queueQuery(params, { order = 0 } = {}) {
   const existing = await readMetadata(params)
-  if (existing) return existing
+  if (existing && existing.status !== 'search_failed') return existing
 
   const metadata = {
     query: params,
@@ -699,7 +706,7 @@ async function scrapDownload(item, storageDir) {
       const filePath = path.join(storageDir, `${fileName}.pdf`)
       await file.saveAs(filePath)
 
-      await fs.chmod(filePath, 0o664);
+      await fs.chmod(filePath, 0o664)
     } finally {
       // Clean up opened pages to prevent lingering promises
       if (page2) await page2.close()
@@ -725,7 +732,26 @@ function verifyDownloads(downloads = new Set(), searchResults) {
 }
 
 async function download(params = {}) {
-  const searchResults = await loadSearchResults(params)
+  let searchResults = null
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      searchResults = await loadSearchResults(params)
+      break
+    } catch (err) {
+      console.log('err', err)
+      if (attempt === 3) {
+        console.error(`[${queryToString(params)}] Failed to load search results after multiple attempts.`)
+        const metadata = await readMetadata(params)
+        metadata.status = 'search_failed'
+        await writeMetadata(params, metadata)
+        return
+      }
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+    }
+  }
 
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
   await fs.mkdir(storageDir, { recursive: true, mode: 0o775 })
@@ -734,7 +760,7 @@ async function download(params = {}) {
   const FAILURE_WINDOW_MS = 5 * 60 * 1000
   let failTimestamps = []
 
-  while (true) {
+  while (searchResults !== null) {
     const now = Date.now()
     // Keep only failures within the sliding 5-minute window
     failTimestamps = failTimestamps.filter((t) => now - t <= FAILURE_WINDOW_MS)
@@ -778,11 +804,9 @@ async function download(params = {}) {
         // Record failure timestamp and log
         failTimestamps.push(Date.now())
 
-        console.error(
-          `[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`,
-        )
+        console.error(`[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`)
 
-        metadata.status = 'error'
+        metadata.status = 'download_blocked'
 
         break
       } finally {
@@ -796,7 +820,7 @@ async function download(params = {}) {
   let msg = ''
 
   if (missingFiles.length > 0) {
-    msg = `[${queryToString(params)}] Failed to download ${missingFiles.length} items after multiple attempts.}`
+    msg = `[${queryToString(params)}] Failed to download ${missingFiles.length} items.}`
 
     console.warn(msg)
   } else {
@@ -806,13 +830,4 @@ async function download(params = {}) {
 
     console.log(msg)
   }
-
-  const result = {
-    totalItems: searchResults.length,
-    downloadedItems: searchResults.length - missingFiles.length,
-    missingItems: missingFiles.length,
-    message: msg,
-  }
-
-  return result
 }
