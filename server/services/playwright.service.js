@@ -106,6 +106,20 @@ async function startExistingQueries() {
   let metadataList = await loadQueriesMetadata()
   let queriesCount = metadataList.length
 
+  // Ensure all queries are marked as 'pending' before starting downloads
+  for (const meta of metadataList) {
+    if (meta.status === 'pending' ) {
+      continue
+    }
+
+    meta.status = 'pending'
+    try {
+      await writeMetadata(meta.query, meta)
+    } catch (err) {
+      console.warn(`[${queryToString(meta.query)}] Failed to update status to 'pending': ${err.message}`)
+    }
+  }
+
   while (queriesCount > 0) {
     // Process all current queries with a concurrency limit so when one finishes we immediately
     // start the next one instead of waiting for the whole batch to complete.
@@ -185,6 +199,137 @@ export function stopQueryWatcher() {
   queryWatcherIntervalId = null
   queryWatcherRunning = false
   console.log('Query watcher stopped')
+}
+
+// Downloads watcher: periodically generates a README.md in DOWNLOADS_DIR with progress info
+let downloadsWatcherIntervalId = null
+let downloadsWatcherRunning = false
+const DOWNLOADS_WATCHER_INTERVAL = parseInt(process.env.DOWNLOADS_WATCHER_INTERVAL || '60000', 10)
+
+/**
+ * Start a background watcher that periodically scans DOWNLOADS_DIR and writes a README.md
+ * The README contains a table with progress for each query folder. If a folder exists in
+ * DOWNLOADS_DIR but has no corresponding metadata it is considered 'completed'.
+ */
+export function startDownloadsWatcher(intervalMs = DOWNLOADS_WATCHER_INTERVAL) {
+  if (downloadsWatcherIntervalId) return
+
+  async function checkDownloads() {
+    if (downloadsWatcherRunning) return
+    downloadsWatcherRunning = true
+    try {
+      await generateDownloadsReport()
+    } catch (err) {
+      console.error('Error while generating downloads report:', err)
+    } finally {
+      downloadsWatcherRunning = false
+    }
+  }
+
+  // Run immediately, then periodically
+  checkDownloads()
+  downloadsWatcherIntervalId = setInterval(checkDownloads, intervalMs)
+  console.log(`Downloads watcher started (interval: ${intervalMs}ms)`)
+}
+
+export function stopDownloadsWatcher() {
+  if (!downloadsWatcherIntervalId) return
+  clearInterval(downloadsWatcherIntervalId)
+  downloadsWatcherIntervalId = null
+  downloadsWatcherRunning = false
+  console.log('Downloads watcher stopped')
+}
+
+async function generateDownloadsReport() {
+  const metadataList = await loadQueriesMetadata()
+  const metadataMap = new Map(metadataList.map((m) => [queryToString(m.query), m]))
+
+  const entries = await fs.readdir(DOWNLOADS_DIR, { withFileTypes: true }).catch(() => [])
+  const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
+
+  const rows = []
+
+  for (const dirName of dirs) {
+    const meta = metadataMap.get(dirName)
+
+    const storageDir = path.join(DOWNLOADS_DIR, dirName)
+    let downloaded = 0
+    try {
+      downloaded = (await fs.readdir(storageDir)).length
+    } catch {
+      downloaded = 0
+    }
+
+    if (!meta) {
+      // No metadata -> completed. Report actual downloaded file count and mark as completed.
+      rows.push({ name: dirName, status: 'completed', downloaded, total: downloaded, progress: '100%', order: Number.MAX_SAFE_INTEGER })
+      continue
+    }
+
+    const total = meta.results || 0
+    const progress = total > 0 ? `${((downloaded / total) * 100).toFixed(2)}%` : 'N/A'
+    rows.push({
+      name: dirName,
+      status: meta.status || 'pending',
+      downloaded,
+      total,
+      progress,
+      order: meta.order || 0,
+    })
+  }
+
+  // Also include queries that have metadata but no folder yet
+  for (const [name, meta] of metadataMap.entries()) {
+    if (!dirs.includes(name)) {
+      rows.push({
+        name,
+        status: meta.status || 'pending',
+        downloaded: 0,
+        total: meta.results || 0,
+        progress: meta.results ? '0.00%' : 'N/A',
+        order: meta.order || 0,
+      })
+    }
+  }
+
+  // Put completed downloads to the bottom; otherwise sort by order then name
+  rows.sort((a, b) => {
+    const aDone = a.status === 'completed' ? 1 : 0
+    const bDone = b.status === 'completed' ? 1 : 0
+    if (aDone !== bDone) return aDone - bDone
+
+    const ao = a.order ?? 0
+    const bo = b.order ?? 0
+    if (ao !== bo) return ao - bo
+
+    return a.name.localeCompare(b.name)
+  })
+
+  const header = `# Downloads report\n\nGenerated at: ${new Date().toISOString()}\n\n`
+  const lines = rows
+    .map((r) => `${r.name} | ${r.status} | ${r.downloaded}/${r.total} | ${r.progress}`)
+    .join('\n')
+
+  const content = header + lines + '\n'
+
+  // Write report atomically and only if contents changed to avoid frequent overwrites
+  const reportName = process.env.DOWNLOADS_REPORT_NAME || 'progress.md'
+  const finalPath = path.join(DOWNLOADS_DIR, reportName)
+
+  try {
+    const existing = await fs.readFile(finalPath, 'utf-8').catch(() => null)
+    if (existing === content) {
+      // No change, skip writing to prevent Nextcloud/clients conflict
+      return
+    }
+  } catch (err) {
+    // ignore and proceed to write
+  }
+
+  const tmpPath = finalPath + '.tmp'
+  await fs.writeFile(tmpPath, content, 'utf-8')
+  await fs.rename(tmpPath, finalPath)
+  console.log(`Downloads report updated: ${finalPath}`)
 }
 
 async function scrapMetadata(params) {
