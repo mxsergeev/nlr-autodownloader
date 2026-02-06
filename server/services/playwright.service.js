@@ -7,13 +7,13 @@ import UserAgent from 'user-agents'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data')
-await fs.mkdir(DATA_DIR, { recursive: true })
+await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 })
 
 const QUERY_DIR = path.join(DATA_DIR, 'queries')
-await fs.mkdir(QUERY_DIR, { recursive: true })
+await fs.mkdir(QUERY_DIR, { recursive: true, mode: 0o775 })
 
 const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
-await fs.mkdir(DOWNLOADS_DIR, { recursive: true })
+await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 })
 
 const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10) || 1
 
@@ -328,6 +328,7 @@ async function generateDownloadsReport() {
 
   const tmpPath = finalPath + '.tmp'
   await fs.writeFile(tmpPath, content, 'utf-8')
+  await fs.chmod(tmpPath, 0o664)
   await fs.rename(tmpPath, finalPath)
   console.log(`Downloads report updated: ${finalPath}`)
 }
@@ -391,7 +392,7 @@ async function scrapMetadata(params) {
 }
 
 async function writeMetadata(params, metadata) {
-  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true })
+  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
   const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
   await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2))
 }
@@ -512,7 +513,7 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
 }
 
 async function getPartFileNames(params) {
-  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true })
+  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
   const dir = path.join(QUERY_DIR, queryToString(params))
   const partNames = (await fs.readdir(dir, { withFileTypes: true }))
     .filter(
@@ -697,6 +698,8 @@ async function scrapDownload(item, storageDir) {
       const fileName = sanitizeFileName(item.fileName)
       const filePath = path.join(storageDir, `${fileName}.pdf`)
       await file.saveAs(filePath)
+
+      await fs.chmod(filePath, 0o664);
     } finally {
       // Clean up opened pages to prevent lingering promises
       if (page2) await page2.close()
@@ -725,7 +728,7 @@ async function download(params = {}) {
   const searchResults = await loadSearchResults(params)
 
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
-  await fs.mkdir(storageDir, { recursive: true })
+  await fs.mkdir(storageDir, { recursive: true, mode: 0o775 })
 
   // Track failure timestamps and abort only if 10 failures occur within the last 5 minutes
   const FAILURE_WINDOW_MS = 5 * 60 * 1000
