@@ -323,7 +323,7 @@ async function generateDownloadsReport() {
 
   try {
     const existing = await fs.readFile(finalPath, 'utf-8').catch(() => null)
-    if (existing === content) {
+    if (existing && existing.split(/Generated at: .+\n/)[1]?.trim() === content.split(/Generated at: .+\n/)[1].trim()) {
       // No change, skip writing to prevent Nextcloud/clients conflict
       return
     }
