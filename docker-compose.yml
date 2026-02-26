@@ -17,5 +17,15 @@ services:
     restart: unless-stopped
     command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
 
+  redis:
+    image: redis:8.6.1-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+
 volumes:
   queries_data:
+  redis_data:
