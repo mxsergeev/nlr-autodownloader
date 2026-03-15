@@ -10,6 +10,8 @@
     "start": "node --env-file ../.env index.js",
     "dev": "nodemon --env-file ../.env index.js",
     "codegen": "npx playwright codegen https://primo.nlr.ru/ --browser=firefox --target=javascript",
+    "install-browsers": "npx playwright install firefox",
+    "smoke": "node scripts/smoke.js",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix"
   },
