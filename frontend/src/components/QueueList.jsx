@@ -1,4 +1,6 @@
 import React from 'react'
+import axios from 'axios'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
   Card,
@@ -12,13 +14,18 @@ import {
   ListItemText,
   IconButton,
   Collapse,
+  Button,
+  Snackbar,
+  Alert,
 } from '@mui/material'
+import ConfirmDialog from './ConfirmDialog'
 import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded'
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded'
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded'
 import InboxRoundedIcon from '@mui/icons-material/InboxRounded'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
+import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import { styled } from '@mui/material/styles'
 
 function formatTimestamp(value) {
@@ -29,13 +36,10 @@ function formatTimestamp(value) {
 
 const STATUS_CONFIG = {
   pending: { label: 'Pending', color: 'default' },
-  queued: { label: 'Queued', color: 'default' },
-  running: { label: 'Running', color: 'primary' },
-  processing: { label: 'Processing', color: 'primary' },
-  done: { label: 'Done', color: 'success' },
+  downloading: { label: 'Downloading', color: 'primary' },
   completed: { label: 'Completed', color: 'success' },
-  failed: { label: 'Failed', color: 'error' },
-  error: { label: 'Error', color: 'error' },
+  download_blocked: { label: 'Download Blocked', color: 'error' },
+  search_failed: { label: 'Search Failed', color: 'error' },
 }
 
 function StatusChip({ status }) {
@@ -106,8 +110,9 @@ const ExpandButton = styled(IconButton, {
   color: theme.palette.text.secondary,
 }))
 
-function QueueItem({ item, index }) {
+function QueueItem({ item, index, isLoading, onRequestDelete }) {
   const [expanded, setExpanded] = React.useState(false)
+
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
   const created = formatTimestamp(item.createdAt)
   const resultsCount = Array.isArray(item.searchResults) ? item.searchResults.length : (item.results ?? 'N/A')
@@ -116,6 +121,12 @@ function QueueItem({ item, index }) {
     // Prevent toggling when clicking on interactive children in the future
     // but allow single-click expanding the item
     setExpanded((s) => !s)
+  }
+
+  const handleDelete = (e) => {
+    e.stopPropagation()
+    if (!item?.id) return
+    onRequestDelete && onRequestDelete(item)
   }
 
   const searchResults = Array.isArray(item.searchResults) ? item.searchResults : []
@@ -162,6 +173,19 @@ function QueueItem({ item, index }) {
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <StatusChip status={item.status} />
+            <Tooltip title="Delete">
+              <IconButton
+                size="small"
+                aria-label="Delete item"
+                color="error"
+                onClick={(e) => {
+                  handleDelete(e)
+                }}
+                disabled={isLoading}
+              >
+                <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
             <ExpandButton
               aria-expanded={expanded}
               aria-label={expanded ? 'Collapse item' : 'Expand item'}
@@ -274,6 +298,41 @@ function QueueItem({ item, index }) {
 }
 
 export default function QueueList({ queue }) {
+  const qc = useQueryClient()
+  const [dialogOpen, setDialogOpen] = React.useState(false)
+  const [selectedItem, setSelectedItem] = React.useState(null)
+  const [snackbar, setSnackbar] = React.useState({ open: false, message: '', severity: 'success' })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id) => {
+      await axios.delete(`/playwright/queue/${id}`)
+      return id
+    },
+    onSuccess: (id) => {
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      setSnackbar({ open: true, message: `Removed query ${id}`, severity: 'success' })
+      setDialogOpen(false)
+      setSelectedItem(null)
+    },
+    onError: (err) => {
+      setSnackbar({ open: true, message: err?.message || 'Failed to remove query', severity: 'error' })
+      setDialogOpen(false)
+      setSelectedItem(null)
+    },
+  })
+
+  const requestDelete = (item) => {
+    setSelectedItem(item)
+    setDialogOpen(true)
+  }
+
+  const confirmDelete = () => {
+    if (!selectedItem?.id) return
+    deleteMutation.mutate(selectedItem.id)
+  }
+
+  const closeSnackbar = () => setSnackbar((s) => ({ ...s, open: false }))
+
   if (!queue || queue.length === 0) {
     return (
       <Box
@@ -318,9 +377,41 @@ export default function QueueList({ queue }) {
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {queue.map((item, index) => (
-          <QueueItem key={item.id ?? item.pageUrl ?? `queue-item-${index}`} item={item} index={index} />
+          <QueueItem
+            key={item.id ?? item.pageUrl ?? `queue-item-${index}`}
+            item={item}
+            index={index}
+            isLoading={deleteMutation.isLoading && selectedItem?.id === item.id}
+            onRequestDelete={requestDelete}
+          />
         ))}
       </Box>
+
+      <ConfirmDialog
+        open={dialogOpen}
+        title="Remove query"
+        content="Are you sure you want to remove this query from the queue? This action cannot be undone."
+        itemLabel={selectedItem?.pageUrl ?? `Query #${selectedItem?.id ?? ''}`}
+        loading={deleteMutation.isLoading}
+        onClose={() => {
+          setDialogOpen(false)
+          setSelectedItem(null)
+        }}
+        onConfirm={confirmDelete}
+        confirmText="Remove"
+        cancelText="Cancel"
+      />
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={closeSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={closeSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }
