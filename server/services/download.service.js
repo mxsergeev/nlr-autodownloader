@@ -3,6 +3,14 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import UserAgent from 'user-agents'
+import {
+  getQuery,
+  upsertQuery,
+  getAllQueries,
+  deleteQuery as dbDeleteQuery,
+  getSearchResults,
+  saveSearchResults,
+} from './db.service.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -74,32 +82,7 @@ async function runJob(fn) {
 }
 
 export async function loadQueriesMetadata() {
-  // find query subdirectories and look for metadata files inside each
-  const entries = await fs.readdir(QUERY_DIR, { withFileTypes: true })
-  const dirs = entries.filter((e) => e.isDirectory())
-
-  const results = []
-
-  for (const dir of dirs) {
-    const dirPath = path.join(QUERY_DIR, dir.name)
-    const files = await fs.readdir(dirPath, { withFileTypes: true })
-    const metaFile = files.find((f) => f.isFile() && f.name.endsWith('.metadata.json'))
-
-    if (!metaFile) continue
-
-    const metaFilePath = path.join(dirPath, metaFile.name)
-    try {
-      const metadata = JSON.parse(await fs.readFile(metaFilePath, 'utf-8'))
-      results.push(metadata)
-    } catch (err) {
-      console.warn(`Failed to read metadata for ${dir.name}:`, err.message)
-    }
-  }
-
-  // Sort by creation date, oldest first
-  results.sort((a, b) => a.order - b.order)
-
-  return results
+  return getAllQueries()
 }
 
 
@@ -302,22 +285,14 @@ async function scrapMetadata(params) {
 }
 
 export async function writeMetadata(params, metadata) {
-  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
-  const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
-  await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2))
+  await upsertQuery(params, metadata)
 }
 
 export async function readMetadata(params) {
-  try {
-    const metadataPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
-    const metadataContent = await fs.readFile(metadataPath, 'utf-8')
-    return JSON.parse(metadataContent)
-  } catch {
-    return null
-  }
+  return getQuery(params)
 }
 
-async function loadMetadata(params) {
+export async function loadMetadata(params) {
   const existingMetadata = await readMetadata(params)
 
   if (existingMetadata && existingMetadata.results !== null) {
@@ -490,6 +465,7 @@ function verifySearchResults(results, metadata) {
 }
 
 export async function removeQuery(params) {
+  await dbDeleteQuery(params)
   const dir = path.join(QUERY_DIR, queryToString(params))
   await fs.rm(dir, { recursive: true, force: true })
 }
@@ -499,19 +475,17 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
     throw new Error('No search parameters provided.')
   }
 
-  const dir = path.join(QUERY_DIR, queryToString(params))
-
-  const searchResults = override
-    ? null
-    : JSON.parse(await fs.readFile(path.join(dir, `${queryToString(params)}.json`), 'utf-8').catch(() => 'null'))
-
-  if (searchResults && searchResults.length > 0) {
-    const metadata = await loadMetadata(params)
-
-    if (verifySearchResults(searchResults, metadata)) {
-      return searchResults
+  if (!override) {
+    const cached = await getSearchResults(params)
+    if (cached && cached.length > 0) {
+      const metadata = await loadMetadata(params)
+      if (verifySearchResults(cached, metadata)) {
+        return cached
+      }
     }
   }
+
+  const dir = path.join(QUERY_DIR, queryToString(params))
 
   let partNames = await getPartFileNames(params)
 
@@ -545,8 +519,7 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
     await fs.unlink(path.join(dir, part.base))
   }
 
-  const outputPath = path.join(dir, `${queryToString(params)}.json`)
-  await fs.writeFile(outputPath, JSON.stringify(results, null, 2))
+  await saveSearchResults(params, results)
 
   return results
 }
