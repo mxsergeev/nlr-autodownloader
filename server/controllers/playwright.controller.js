@@ -1,5 +1,5 @@
 import express from 'express'
-import { loadQueriesMetadata, queueQuery } from '../services/playwright.service.js'
+import { loadQueriesMetadata, queueQuery } from '../services/download.service.js'
 
 const router = express.Router()
 

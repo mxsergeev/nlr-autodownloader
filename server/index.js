@@ -1,5 +1,5 @@
 import app from './app.js'
-import { startQueryWatcher, startDownloadsWatcher } from './services/playwright.service.js'
+import { startQueryWatcher, startDownloadsWatcher } from './services/download.service.js'
 
 const port = process.env.SERVER_PORT || 3333
 
