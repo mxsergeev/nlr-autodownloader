@@ -4,10 +4,10 @@ import {
   queueQuery,
   queryToString,
   writeMetadata,
-  readMetadata,
   removeQuery,
 } from '../services/download.service.js'
 import { metadataQueue, searchQueue } from '../queue.js'
+import { getQuery } from '../services/db.service.js'
 
 const router = express.Router()
 
@@ -75,7 +75,7 @@ router.post('/queue', async (req, res) => {
 router.get('/queue/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const metadata = await readMetadata({ id: Number(id) })
+    const metadata = await getQuery({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -92,7 +92,7 @@ router.delete('/queue/:id', async (req, res) => {
   try {
     const { id } = req.params
     const { removeDownloads } = req.query
-    const metadata = await readMetadata({ id: Number(id) })
+    const metadata = await getQuery({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -110,7 +110,7 @@ router.delete('/queue/:id', async (req, res) => {
 router.post('/queue/:id/retry', async (req, res) => {
   try {
     const { id } = req.params
-    const metadata = await readMetadata({ id: Number(id) })
+    const metadata = await getQuery({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -142,7 +142,7 @@ router.post('/queue/:id/retry', async (req, res) => {
       })
     }
 
-    const updated = await readMetadata({ id: Number(id) })
+    const updated = await getQuery({ id: Number(id) })
     res.json({ retried: Number(id), metadata: updated })
   } catch (error) {
     console.error('Query retry error:', error)

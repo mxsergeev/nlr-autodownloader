@@ -132,12 +132,8 @@ export async function writeMetadata(params, metadata) {
   return upsertQuery(params, metadata)
 }
 
-export async function readMetadata(params) {
-  return getQuery(params)
-}
-
 export async function loadMetadata(params) {
-  const existingMetadata = await readMetadata(params)
+  const existingMetadata = await getQuery(params)
 
   if (existingMetadata && existingMetadata.results !== null) {
     return existingMetadata
@@ -169,7 +165,7 @@ export async function loadMetadata(params) {
  * Creates a minimal metadata record with status 'pending' so the query is resumed on server start or by the watcher.
  */
 export async function queueQuery(params, { order = 0 } = {}) {
-  const existing = await readMetadata(params)
+  const existing = await getQuery(params)
   if (existing && existing.status !== 'search_failed') return existing
 
   if (params && params.id) {
@@ -184,7 +180,7 @@ export async function queueQuery(params, { order = 0 } = {}) {
       status: 'pending',
     }
     await upsertQuery({ id: params.id }, meta)
-    return await readMetadata({ id: params.id })
+    return await getQuery({ id: params.id })
   }
 
   if (params && params.url) {
