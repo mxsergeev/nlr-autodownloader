@@ -1,9 +1,25 @@
 import React from 'react'
-import { Box, Card, CardContent, Chip, Typography, Tooltip, Divider } from '@mui/material'
+import {
+  Box,
+  Card,
+  CardContent,
+  Chip,
+  Typography,
+  Tooltip,
+  Divider,
+  List,
+  ListItem,
+  ListItemText,
+  IconButton,
+  Collapse,
+} from '@mui/material'
 import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded'
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded'
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded'
 import InboxRoundedIcon from '@mui/icons-material/InboxRounded'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
+import { styled } from '@mui/material/styles'
 
 function formatTimestamp(value) {
   if (!value) return 'N/A'
@@ -79,10 +95,30 @@ function MetaItem({ icon, label, value, truncate = false }) {
   )
 }
 
+// Styled expand button that rotates when expanded
+const ExpandButton = styled(IconButton, {
+  shouldForwardProp: (prop) => prop !== 'expand',
+})(({ theme, expand }) => ({
+  transform: expand ? 'rotate(180deg)' : 'rotate(0deg)',
+  transition: theme.transitions.create('transform', {
+    duration: theme.transitions.duration.shortest,
+  }),
+  color: theme.palette.text.secondary,
+}))
+
 function QueueItem({ item, index }) {
+  const [expanded, setExpanded] = React.useState(false)
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
   const created = formatTimestamp(item.createdAt)
-  const results = item.results ?? 'N/A'
+  const resultsCount = Array.isArray(item.searchResults) ? item.searchResults.length : (item.results ?? 'N/A')
+
+  const toggle = (ev) => {
+    // Prevent toggling when clicking on interactive children in the future
+    // but allow single-click expanding the item
+    setExpanded((s) => !s)
+  }
+
+  const searchResults = Array.isArray(item.searchResults) ? item.searchResults : []
 
   return (
     <Card
@@ -96,8 +132,14 @@ function QueueItem({ item, index }) {
         },
       }}
     >
-      <CardContent sx={{ p: '12px 16px !important' }}>
-        {/* Top row: URL label + status chip */}
+      <CardContent
+        onClick={toggle}
+        sx={{
+          p: '12px 16px !important',
+          cursor: 'pointer',
+        }}
+      >
+        {/* Top row: URL label + status chip + expand button */}
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flex: 1, minWidth: 0 }}>
             <LinkRoundedIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0, mt: '1px' }} />
@@ -117,7 +159,23 @@ function QueueItem({ item, index }) {
               </Typography>
             </Tooltip>
           </Box>
-          <StatusChip status={item.status} />
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <StatusChip status={item.status} />
+            <ExpandButton
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse item' : 'Expand item'}
+              expand={expanded ? 1 : 0}
+              size="small"
+              onClick={(e) => {
+                // stop propagation so the CardContent's onClick doesn't toggle twice
+                e.stopPropagation()
+                setExpanded((s) => !s)
+              }}
+            >
+              <ExpandMoreIcon sx={{ fontSize: 18 }} />
+            </ExpandButton>
+          </Box>
         </Box>
 
         <Divider sx={{ mb: 1, borderColor: 'divider' }} />
@@ -131,10 +189,86 @@ function QueueItem({ item, index }) {
             alignItems: 'center',
           }}
         >
-          <MetaItem icon={<LibraryBooksRoundedIcon sx={{ fontSize: 13 }} />} label="Results:" value={results} />
+          <MetaItem icon={<LibraryBooksRoundedIcon sx={{ fontSize: 13 }} />} label="Results:" value={resultsCount} />
           <MetaItem icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />} label="Created:" value={created} />
         </Box>
       </CardContent>
+
+      {/* Expandable area: list of documents */}
+      <Collapse in={expanded} timeout="auto" unmountOnExit>
+        <Box sx={{ p: 1 }}>
+          <Divider />
+          <Box sx={{ px: 1, py: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <DescriptionRoundedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+              <Typography variant="subtitle2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                Documents ({searchResults.length})
+              </Typography>
+            </Box>
+
+            {searchResults.length === 0 ? (
+              <Typography variant="caption" sx={{ color: 'text.secondary', ml: 4 }}>
+                No documents found for this query.
+              </Typography>
+            ) : (
+              <List dense disablePadding>
+                {searchResults.map((doc, i) => (
+                  <React.Fragment key={doc.id ?? doc.href ?? `${i}`}>
+                    <ListItem
+                      sx={{
+                        px: 1,
+                        py: 0.5,
+                        alignItems: 'center',
+                      }}
+                      secondaryAction={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <StatusChip status={doc.status} />
+                        </Box>
+                      }
+                    >
+                      <ListItemText
+                        primary={
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 500,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: 'calc(100% - 120px)',
+                            }}
+                          >
+                            {doc.fileName ?? doc.title ?? doc.href ?? 'Untitled'}
+                          </Typography>
+                        }
+                        secondary={
+                          doc.href ? (
+                            <Tooltip title={doc.href}>
+                              <Typography
+                                variant="caption"
+                                sx={{
+                                  color: 'text.secondary',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  maxWidth: '100%',
+                                }}
+                              >
+                                {doc.href}
+                              </Typography>
+                            </Tooltip>
+                          ) : null
+                        }
+                      />
+                    </ListItem>
+                    {i < searchResults.length - 1 && <Divider component="li" sx={{ my: 0.5 }} />}
+                  </React.Fragment>
+                ))}
+              </List>
+            )}
+          </Box>
+        </Box>
+      </Collapse>
     </Card>
   )
 }
