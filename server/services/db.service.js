@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { downloadQueue, searchQueue } from '../queue.js'
 
 export const prisma = new PrismaClient()
 
@@ -6,17 +7,14 @@ export const prisma = new PrismaClient()
  * Returns the Prisma Query record for the given params.
  * Supports lookup by id or by pageUrl (url).
  */
-export async function getQuery(params) {
-  if (!params) return null
-
-  if (params.id !== undefined && params.id !== null) {
-    const id = Number(params.id)
-    const record = await prisma.query.findUnique({ where: { id } })
+export async function getMetadata({ id, url }) {
+  if (id) {
+    const record = await prisma.query.findUnique({ where: { id: Number(id) }, include: { searchResults: true } })
     return toSerializableQuery(record)
   }
 
-  if (params.url) {
-    const record = await prisma.query.findUnique({ where: { pageUrl: params.url } })
+  if (url) {
+    const record = await prisma.query.findUnique({ where: { pageUrl: url }, include: { searchResults: true } })
     return toSerializableQuery(record)
   }
 
@@ -28,19 +26,19 @@ export async function getQuery(params) {
  * @param {{ id?: number, url?: string }} params
  * @param {object} metadata  Prisma-compatible fields (results, resultsPerPart, parts, pageUrl, createdAt, order, status, lastAttempt, downloaded, downloadProgress)
  */
-export async function upsertQuery(params, metadata) {
+export async function upsertMetadata({ id, url }, metadata) {
   const data = normalize(metadata)
 
-  if (params && params.id !== undefined && params.id !== null) {
-    const record = await prisma.query.update({ where: { id: Number(params.id) }, data })
+  if (id) {
+    const record = await prisma.query.update({ where: { id: Number(id) }, data })
     return toSerializableQuery(record)
   }
 
-  if (params && params.url) {
+  if (url) {
     // pageUrl is unique in the schema - use upsert by pageUrl
     const record = await prisma.query.upsert({
-      where: { pageUrl: params.url },
-      create: { pageUrl: params.url, ...data },
+      where: { pageUrl: url },
+      create: { pageUrl: url, ...data },
       update: data,
     })
     return toSerializableQuery(record)
@@ -52,8 +50,11 @@ export async function upsertQuery(params, metadata) {
 /**
  * Returns all query records sorted by order ascending.
  */
-export async function getAllQueries() {
-  const records = await prisma.query.findMany({ orderBy: { order: 'asc' } })
+export async function getAllMetadata() {
+  const records = await prisma.query.findMany({
+    orderBy: { order: 'asc' },
+    include: { searchResults: true },
+  })
   return records.map(toSerializableQuery)
 }
 
@@ -62,37 +63,52 @@ export async function getAllQueries() {
  * Resolves to null if the record does not exist.
  * @param {{ id?: number, url?: string }} params
  */
-export async function deleteQuery(params) {
-  if (!params) return null
-
-  if (params.id !== undefined && params.id !== null) {
-    return prisma.query.delete({ where: { id: Number(params.id) } }).catch(() => null)
+export async function deleteMetadata({ id }) {
+  if (!id) {
+    return null
   }
 
-  if (params.url) {
-    const existing = await prisma.query.findUnique({ where: { pageUrl: params.url } })
-    if (!existing) return null
-    return prisma.query.delete({ where: { id: existing.id } }).catch(() => null)
+  const metadata = await getMetadata({ id: Number(id) })
+
+  if (!metadata) {
+    return null
   }
 
-  return null
+  const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`)
+
+  try {
+    if (searchJob) {
+      await searchJob.remove()
+    }
+
+    if (metadata.searchResults?.length > 0) {
+      const downloadJobs = (
+        await Promise.allSettled(metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`)))
+      )
+        .filter((r) => r.status === 'fulfilled' && r.value)
+        .map((r) => r.value)
+
+      await Promise.allSettled(downloadJobs.map((j) => j.remove()))
+    }
+
+    return prisma.query.delete({ where: { id: Number(id) } }).catch(() => null)
+  } catch (err) {
+    console.error(`Error removing jobs for query ${metadata.id}:`, err)
+    return null
+  }
 }
 
 /**
  * Returns all search results for a query as plain objects { title, href, fileName }.
  * Returns null if the query does not exist.
- * @param {{ id?: number, url?: string }} params
+ * @param {{ queryId?: number, }} params  Lookup by queryId
  */
-export async function getSearchResults(params) {
-  if (!params) return null
+export async function getSearchResults({ queryId } = {}) {
+  if (!queryId) return null
 
-  const record =
-    params.id !== undefined && params.id !== null
-      ? await prisma.query.findUnique({ where: { id: Number(params.id) }, include: { searchResults: true } })
-      : await prisma.query.findUnique({ where: { pageUrl: params.url }, include: { searchResults: true } })
+  const results = await prisma.searchResult.findMany({ where: { queryId: Number(queryId) } })
 
-  if (!record) return null
-  return record.searchResults.map(({ title, href, fileName }) => ({ title, href, fileName }))
+  return results
 }
 
 /**
@@ -100,27 +116,22 @@ export async function getSearchResults(params) {
  * @param {{ id?: number, url?: string }} params
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
-export async function saveSearchResults(params, results) {
-  if (!params) throw new Error('No params provided')
-
-  const record =
-    params.id !== undefined && params.id !== null
-      ? await prisma.query.findUnique({ where: { id: Number(params.id) } })
-      : await prisma.query.findUnique({ where: { pageUrl: params.url } })
-
-  if (!record) throw new Error(`Query not found: ${params.id ?? params.url}`)
-
+export async function saveSearchResults({ queryId }, results) {
   await prisma.$transaction([
-    prisma.searchResult.deleteMany({ where: { queryId: record.id } }),
+    prisma.searchResult.deleteMany({ where: { queryId } }),
     prisma.searchResult.createMany({
       data: results.map((r) => ({
         title: r.title,
         href: r.href,
         fileName: r.fileName,
-        queryId: record.id,
+        queryId: Number(queryId),
       })),
     }),
   ])
+}
+
+export async function updateSearchResult(id, data) {
+  await prisma.searchResult.update({ where: { id: Number(id) }, data })
 }
 
 // ---------------------------------------------------------------------------

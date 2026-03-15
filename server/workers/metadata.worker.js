@@ -1,22 +1,28 @@
 import { Worker } from 'bullmq'
-import { connection, searchQueue } from '../queue.js'
-import { loadMetadata, queryToString } from '../services/download.service.js'
+import { connection } from '../queue.js'
+import { getMetadata, upsertMetadata } from '../services/db.service.js'
+import { addSearchJob } from '../queues/search.queue.js'
+import { scrapMetadata } from '../services/download.service.js'
 
 export const metadataWorker = new Worker(
   'metadataQueue',
   async (job) => {
-    const { query } = job.data
-    const metadata = await loadMetadata(query)
+    const { url } = job.data
+
+    const existing = await getMetadata({ url })
+
+    if (existing && existing.results > 0 && existing.searchResults.length === existing.results) {
+      await addSearchJob({ metadata: existing })
+
+      return existing
+    }
+
+    let metadata = await scrapMetadata({ url })
+
+    metadata = await upsertMetadata({ url }, metadata)
 
     if (metadata && metadata.results > 0) {
-      await searchQueue.add(
-        queryToString(query),
-        { query },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
-      )
+      await addSearchJob({ metadata })
     }
 
     return metadata

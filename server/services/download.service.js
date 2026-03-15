@@ -3,14 +3,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import UserAgent from 'user-agents'
-import {
-  getQuery,
-  upsertQuery,
-  getAllQueries,
-  deleteQuery as dbDeleteQuery,
-  getSearchResults,
-  saveSearchResults,
-} from './db.service.js'
+import { getMetadata, upsertMetadata, deleteMetadata as dbDeleteQuery, saveSearchResults } from './db.service.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -78,20 +71,9 @@ async function runJob(fn) {
   }
 }
 
-export async function loadQueriesMetadata() {
-  return getAllQueries()
-}
-
-async function scrapMetadata(params) {
-  // Try to find existing record to get pageUrl if needed
-  const existing = await getQuery(params)
-  const pageUrl = params && params.url ? params.url : existing?.pageUrl
-  if (!pageUrl) throw new Error('No pageUrl provided to scrap metadata')
-
-  console.log(`[${queryToString(params)}] Scraping metadata for ${pageUrl}`)
-
+export async function scrapMetadata({ url } = {}) {
   return runJob(async (page) => {
-    await page.goto(pageUrl)
+    await page.goto(url)
 
     await page
       .getByRole('button', { name: 'Сортировать по Релевантность' })
@@ -128,84 +110,31 @@ async function scrapMetadata(params) {
   })
 }
 
-export async function writeMetadata(params, metadata) {
-  return upsertQuery(params, metadata)
-}
-
-export async function loadMetadata(params) {
-  const existingMetadata = await getQuery(params)
-
-  if (existingMetadata && existingMetadata.results !== null) {
-    return existingMetadata
-  }
-
-  try {
-    const metadata = await scrapMetadata(params)
-
-    // Use Date objects in the new Prisma format for createdAt, and normalize order to Number for in-memory logic
-    metadata.createdAt = existingMetadata?.createdAt ?? new Date()
-    metadata.order = existingMetadata ? Number(existingMetadata.order) : Date.now()
-    metadata.status = 'pending'
-
-    // Persist metadata using pageUrl as key (upsert will create or update as needed)
-    const updated = await upsertQuery({ url: metadata.pageUrl }, metadata)
-    return updated
-  } catch (err) {
-    if (existingMetadata && err.message.includes('No results found')) {
-      console.warn(`[${queryToString(params)}] No results found, removing query.`)
-      await removeQuery(params)
-    }
-
-    throw new Error(err)
-  }
-}
-
 /**
  * Queue a query without performing heavy scraping now.
  * Creates a minimal metadata record with status 'pending' so the query is resumed on server start or by the watcher.
  */
 export async function queueQuery(params, { order = 0 } = {}) {
-  const existing = await getQuery(params)
+  const existing = await getMetadata(params)
+
   if (existing && existing.status !== 'search_failed') return existing
 
-  if (params && params.id) {
-    // Re-queue existing record by id
-    const meta = {
-      results: existing?.results ?? null,
-      resultsPerPart: existing?.resultsPerPart ?? null,
-      parts: existing?.parts ?? null,
-      pageUrl: existing?.pageUrl ?? null,
-      createdAt: existing?.createdAt ?? new Date(),
-      order: Date.now() + order,
-      status: 'pending',
-    }
-    await upsertQuery({ id: params.id }, meta)
-    return await getQuery({ id: params.id })
+  const metadata = {
+    results: null,
+    resultsPerPart: null,
+    parts: null,
+    pageUrl: params.url,
+    createdAt: new Date(),
+    order: Date.now() + order,
+    status: 'pending',
   }
 
-  if (params && params.url) {
-    const metadata = {
-      results: null,
-      resultsPerPart: null,
-      parts: null,
-      pageUrl: params.url,
-      createdAt: new Date(),
-      order: Date.now() + order,
-      status: 'pending',
-    }
+  const record = await upsertMetadata({ url: params.url }, metadata)
 
-    const record = await upsertQuery({ url: params.url }, metadata)
-    return record
-  }
-
-  throw new Error('Invalid params for queueQuery; expected id or url')
+  return record
 }
 
-async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls = new Set() } = {}) {
-  const metadata = await loadMetadata(params)
-
-  console.log(`[${queryToString(params)}] Scraping search results for ${metadata.results} documents`)
-
+export async function scrapSearchResults(metadata, { doneParts = new Set(), scrapedUrls = new Set() } = {}) {
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls)
     const results = []
@@ -242,13 +171,13 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
     }
 
     // Persist results to DB
-    await saveSearchResults(params, results)
+    await saveSearchResults({ queryId: metadata.id }, results)
 
     return results
   })
 }
 
-function verifySearchResults(results, metadata) {
+export function verifySearchResults(results, metadata) {
   const createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null
   const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
 
@@ -293,32 +222,6 @@ export async function removeQuery(params, { removeDownloads = true } = {}) {
     const dir = path.join(DOWNLOADS_DIR, queryToString(params))
     await fs.rm(dir, { recursive: true, force: true })
   }
-}
-
-export async function loadSearchResults(params = {}, { override = false } = {}) {
-  if (!params || Object.keys(params).length === 0) {
-    throw new Error('No search parameters provided.')
-  }
-
-  if (!override) {
-    const cached = await getSearchResults(params)
-    if (cached && cached.length > 0) {
-      const metadata = await loadMetadata(params)
-      if (verifySearchResults(cached, metadata)) {
-        return cached
-      }
-    }
-  }
-
-  const results = await scrapSearchResults(params)
-
-  const metadata = await loadMetadata(params)
-
-  if (!verifySearchResults(results, metadata)) {
-    throw new Error('Search results verification failed.')
-  }
-
-  return results
 }
 
 function sanitizeFileName(name = '') {
@@ -396,8 +299,8 @@ export async function scrapDownload(item, storageDir) {
   })
 }
 
-export async function getDownloadedFileNames(params) {
-  const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
+export async function getDownloadedFileNames(metadata) {
+  const storageDir = path.join(DOWNLOADS_DIR, metadata.id.toString())
   try {
     return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name))
   } catch (err) {

@@ -1,31 +1,37 @@
 import { Worker } from 'bullmq'
-import { connection, downloadQueue } from '../queue.js'
-import { loadSearchResults, getDownloadedFileNames, verifyDownloads, queryToString } from '../services/download.service.js'
+import { connection } from '../queue.js'
+import { scrapSearchResults, verifySearchResults } from '../services/download.service.js'
+import { getSearchResults, saveSearchResults } from '../services/db.service.js'
+import { addDownloadJobBulk } from '../queues/download.queue.js'
 
 export const searchWorker = new Worker(
   'searchQueue',
   async (job) => {
-    const { query } = job.data
-    
-    const searchResults = await loadSearchResults(query)
-    
-    const downloads = await getDownloadedFileNames(query)
-    const { missingFiles } = verifyDownloads(downloads, searchResults)
-    
-    if (missingFiles && missingFiles.length > 0) {
-      const jobs = missingFiles.map((item) => ({
-        name: `${queryToString(query)}-${item.fileName}`,
-        data: { query, item },
-        opts: {
-          attempts: 10,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
-      }))
-      
-      await downloadQueue.addBulk(jobs)
+    const { metadata } = job.data
+
+    let results
+
+    const existing = await getSearchResults({ queryId: metadata.id })
+
+    if (existing.length > 0 && verifySearchResults(existing, metadata)) {
+      results = existing
     }
 
-    return { total: searchResults.length, missing: missingFiles.length }
+    if (!results) {
+      results = await scrapSearchResults(metadata)
+
+      if (verifySearchResults(results, metadata)) {
+        await saveSearchResults({ queryId: metadata.id }, results)
+      } else {
+        throw new Error('Scraped search results do not match expected metadata')
+      }
+    }
+
+    results = await getSearchResults({ queryId: metadata.id })
+
+    await addDownloadJobBulk({ metadata, searchResults: results })
+
+    return { metadata, searchResults: results }
   },
   { connection, concurrency: 1 },
 )
@@ -34,6 +40,6 @@ searchWorker.on('failed', (job, err) => {
   console.error(`[Search] Job ${job?.id} failed:`, err.message)
 })
 
-searchWorker.on('completed', (job, returnvalue) => {
-  console.log(`[Search] Job ${job?.id} completed (Total: ${returnvalue.total}, Missing: ${returnvalue.missing})`)
+searchWorker.on('completed', (job) => {
+  console.log(`[Search] Job ${job?.id} completed`)
 })

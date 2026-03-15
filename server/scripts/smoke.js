@@ -1,5 +1,8 @@
 import fetch from 'node-fetch'
-import { connection } from '../redis.js'
+import Redis from 'ioredis'
+import { redisOptions } from '../redis.js'
+
+const connection = new Redis(redisOptions)
 
 const SERVER_URL = `http://localhost:${process.env.SERVER_PORT || 3333}`
 

@@ -20,7 +20,7 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    command: /bin/sh -c 'npx prisma migrate deploy && if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
+    command: /bin/sh -c 'npx prisma migrate deploy && if [ "$NODE_ENV" = "development" ]; then npm run db:studio & STUDIO_PID=$!; npm run dev; kill $STUDIO_PID 2>/dev/null; else npm start; fi'
 
   frontend:
     build:
@@ -44,6 +44,8 @@ services:
   redis:
     image: redis:8.6.1-alpine
     restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     environment:

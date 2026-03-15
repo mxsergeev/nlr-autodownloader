@@ -1,19 +1,14 @@
 import express from 'express'
-import {
-  loadQueriesMetadata,
-  queueQuery,
-  queryToString,
-  writeMetadata,
-  removeQuery,
-} from '../services/download.service.js'
+import { queryToString, removeQuery } from '../services/download.service.js'
 import { metadataQueue, searchQueue } from '../queue.js'
-import { getQuery } from '../services/db.service.js'
+import { getAllMetadata, getMetadata, upsertMetadata } from '../services/db.service.js'
+import { addMetadataJob } from '../queues/metadata.queue.js'
 
 const router = express.Router()
 
 router.get('/queue', async (req, res) => {
   try {
-    const queue = await loadQueriesMetadata()
+    const queue = await getAllMetadata()
 
     res.json({ queue })
   } catch (error) {
@@ -35,35 +30,16 @@ router.post('/queue', async (req, res) => {
     }
 
     const ops = queries.map(async (q, index) => {
-      // Accept { id } or { url }
-      if (q.id) {
-        const record = await queueQuery({ id: q.id }, { order: index })
-        await metadataQueue.add(queryToString({ id: record.id }), { query: { id: record.id } }, {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        })
-        return { ok: true, id: record.id }
+      if (!q.url) {
+        return Promise.reject(new Error(`Query at index ${index} is missing 'url' field`))
       }
 
-      if (q.url) {
-        const record = await queueQuery({ url: q.url }, { order: index })
-        await metadataQueue.add(
-          queryToString({ id: record.id }),
-          { query: { id: record.id } },
-          {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 5000 },
-          },
-        )
-        return { ok: true, id: record.id }
-      }
-
-      return { ok: false, error: 'Invalid query object' }
+      return addMetadataJob({ url: q.url })
     })
 
     const qsResults = await Promise.allSettled(ops)
 
-    const queue = await loadQueriesMetadata()
+    const queue = await getAllMetadata()
 
     res.json({ failed: qsResults.filter((r) => r.status === 'rejected').map((r) => r.reason), queue })
   } catch (error) {
@@ -79,7 +55,7 @@ router.post('/queue', async (req, res) => {
 router.get('/queue/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const metadata = await getQuery({ id: Number(id) })
+    const metadata = await getMetadata({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -95,14 +71,8 @@ router.get('/queue/:id', async (req, res) => {
 router.delete('/queue/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { removeDownloads } = req.query
-    const metadata = await getQuery({ id: Number(id) })
 
-    if (!metadata) {
-      return res.status(404).json({ error: 'Query not found' })
-    }
-
-    await removeQuery({ id: Number(id) }, { removeDownloads: removeDownloads === 'true' })
+    await removeQuery({ id: Number(id) })
 
     res.json({ removed: Number(id) })
   } catch (error) {
@@ -114,7 +84,7 @@ router.delete('/queue/:id', async (req, res) => {
 router.post('/queue/:id/retry', async (req, res) => {
   try {
     const { id } = req.params
-    const metadata = await getQuery({ id: Number(id) })
+    const metadata = await getMetadata({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -130,7 +100,7 @@ router.post('/queue/:id/retry', async (req, res) => {
 
     const originalStatus = metadata.status
     metadata.status = 'pending'
-    await writeMetadata({ id: Number(id) }, metadata)
+    await upsertMetadata({ id: Number(id) }, metadata)
 
     if (originalStatus === 'download_blocked') {
       // Search data exists — re-queue search to identify and re-download missing files
@@ -154,7 +124,7 @@ router.post('/queue/:id/retry', async (req, res) => {
       )
     }
 
-    const updated = await getQuery({ id: Number(id) })
+    const updated = await getMetadata({ id: Number(id) })
     res.json({ retried: Number(id), metadata: updated })
   } catch (error) {
     console.error('Query retry error:', error)

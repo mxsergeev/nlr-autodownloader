@@ -16,18 +16,18 @@ enum QueryStatus {
 }
 
 model Query {
-  id               Int           @id @default(autoincrement())
-  pageUrl          String        @unique
-  status           QueryStatus   @default(pending)
+  id               Int         @id @default(autoincrement())
+  pageUrl          String      @unique
+  status           QueryStatus @default(pending)
   results          Int?
   resultsPerPart   Int?
   parts            Int?
   /// Numeric sort key — stored as Date.now() + offset, so needs BigInt
-  order            BigInt        @default(0)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  order            BigInt      @default(0)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
   lastAttempt      DateTime?
-  downloaded       Int           @default(0)
+  downloaded       Int         @default(0)
   downloadProgress String?
 
   searchResults SearchResult[]
@@ -41,6 +41,8 @@ model SearchResult {
 
   queryId Int
   query   Query @relation(fields: [queryId], references: [id], onDelete: Cascade)
+
+  status QueryStatus @default(pending)
 
   @@unique([queryId, href])
 }
