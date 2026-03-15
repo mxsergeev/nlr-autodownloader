@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
-import { Box, TextField, Button } from '@mui/material'
+import { Box, TextField, Button, InputAdornment } from '@mui/material'
+import LinkRoundedIcon from '@mui/icons-material/LinkRounded'
+import AddRoundedIcon from '@mui/icons-material/AddRounded'
 
 const helperTextFallback = 'Queue a Primo URL (results page) to start the download.'
 
@@ -9,9 +11,7 @@ export default function AddQueryForm({ onSubmitUrl, isSubmitting }) {
 
   const handleChange = (event) => {
     setUrl(event.target.value)
-    if (error) {
-      setError('')
-    }
+    if (error) setError('')
   }
 
   const validateUrl = (value) => {
@@ -42,22 +42,49 @@ export default function AddQueryForm({ onSubmitUrl, isSubmitting }) {
   }
 
   return (
-    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', gap: 2, mb: 3 }}>
-      <TextField
-        label="Primo URL"
-        placeholder="https://..."
-        value={url}
-        onChange={handleChange}
-        type="url"
-        fullWidth
-        error={Boolean(error)}
-        helperText={error || helperTextFallback}
-        disabled={isSubmitting}
-        required
-      />
-      <Button variant="contained" type="submit" disabled={isSubmitting}>
-        Add
-      </Button>
+    <Box component="form" onSubmit={handleSubmit} sx={{ mb: 3 }}>
+      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+        <TextField
+          placeholder="https://primo.example.edu/results?query=…"
+          value={url}
+          onChange={handleChange}
+          type="url"
+          fullWidth
+          error={Boolean(error)}
+          helperText={error || helperTextFallback}
+          disabled={isSubmitting}
+          required
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <LinkRoundedIcon fontSize="small" sx={{ color: error ? 'error.main' : 'text.secondary' }} />
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              bgcolor: 'background.paper',
+            },
+          }}
+        />
+        <Button
+          variant="contained"
+          type="submit"
+          disabled={isSubmitting}
+          startIcon={<AddRoundedIcon />}
+          sx={{
+            height: 40,
+            mt: '1px',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+            px: 2.5,
+          }}
+        >
+          Add URL
+        </Button>
+      </Box>
     </Box>
   )
 }
