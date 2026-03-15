@@ -1,6 +1,6 @@
 import { Queue } from 'bullmq'
 import Redis from 'ioredis'
-import { redisOptions } from './redis'
+import { redisOptions } from './redis.js'
 
 export const connection = new Redis(redisOptions)
 

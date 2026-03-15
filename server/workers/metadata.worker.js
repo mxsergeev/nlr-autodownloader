@@ -9,10 +9,14 @@ export const metadataWorker = new Worker(
     const metadata = await loadMetadata(query)
 
     if (metadata && metadata.results > 0) {
-      await searchQueue.add(queryToString(query), { query }, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-      })
+      await searchQueue.add(
+        queryToString(query),
+        { query },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        },
+      )
     }
 
     return metadata

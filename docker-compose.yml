@@ -20,7 +20,7 @@ services:
       frontend:
         condition: service_started
     restart: unless-stopped
-    command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
+    command: /bin/sh -c 'npx prisma migrate deploy && if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
 
   frontend:
     build:

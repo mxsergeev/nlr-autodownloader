@@ -12,12 +12,12 @@ export async function getQuery(params) {
   if (params.id !== undefined && params.id !== null) {
     const id = Number(params.id)
     const record = await prisma.query.findUnique({ where: { id } })
-    return record ?? null
+    return toSerializableQuery(record)
   }
 
   if (params.url) {
     const record = await prisma.query.findUnique({ where: { pageUrl: params.url } })
-    return record ?? null
+    return toSerializableQuery(record)
   }
 
   return null
@@ -32,16 +32,18 @@ export async function upsertQuery(params, metadata) {
   const data = normalize(metadata)
 
   if (params && params.id !== undefined && params.id !== null) {
-    return prisma.query.update({ where: { id: Number(params.id) }, data })
+    const record = await prisma.query.update({ where: { id: Number(params.id) }, data })
+    return toSerializableQuery(record)
   }
 
   if (params && params.url) {
     // pageUrl is unique in the schema - use upsert by pageUrl
-    return prisma.query.upsert({
+    const record = await prisma.query.upsert({
       where: { pageUrl: params.url },
       create: { pageUrl: params.url, ...data },
       update: data,
     })
+    return toSerializableQuery(record)
   }
 
   throw new Error('Invalid params for upsertQuery: need id or url')
@@ -52,7 +54,7 @@ export async function upsertQuery(params, metadata) {
  */
 export async function getAllQueries() {
   const records = await prisma.query.findMany({ orderBy: { order: 'asc' } })
-  return records
+  return records.map(toSerializableQuery)
 }
 
 /**
@@ -137,5 +139,14 @@ function normalize(metadata) {
     lastAttempt: metadata.lastAttempt ? new Date(metadata.lastAttempt) : (metadata.lastAttempt ?? null),
     downloaded: metadata.downloaded ?? 0,
     downloadProgress: metadata.downloadProgress ?? null,
+  }
+}
+
+function toSerializableQuery(record) {
+  if (!record) return null
+
+  return {
+    ...record,
+    order: typeof record.order === 'bigint' ? Number(record.order) : record.order,
   }
 }
