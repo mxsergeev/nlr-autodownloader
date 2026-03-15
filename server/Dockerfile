@@ -23,9 +23,12 @@ RUN usermod -g 0 node
 USER node
 
 RUN npm install
-RUN npx playwright install firefox
-RUN npx prisma generate
 
+RUN npx playwright install firefox
+
+# Copy application source so prisma/schema.prisma is available before generation
 COPY . .
+
+RUN npx prisma generate
 
 CMD ["node", "index.js"]
