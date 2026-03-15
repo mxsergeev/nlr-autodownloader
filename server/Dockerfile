@@ -24,6 +24,7 @@ USER node
 
 RUN npm install
 RUN npx playwright install firefox
+RUN npx prisma generate
 
 COPY . .
 
