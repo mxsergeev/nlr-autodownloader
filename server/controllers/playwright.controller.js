@@ -47,10 +47,14 @@ router.post('/queue', async (req, res) => {
 
       if (q.url) {
         const record = await queueQuery({ url: q.url }, { order: index })
-        await metadataQueue.add(queryToString({ id: record.id }), { query: { id: record.id } }, {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        })
+        await metadataQueue.add(
+          queryToString({ id: record.id }),
+          { query: { id: record.id } },
+          {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5000 },
+          },
+        )
         return { ok: true, id: record.id }
       }
 
@@ -130,16 +134,24 @@ router.post('/queue/:id/retry', async (req, res) => {
 
     if (originalStatus === 'download_blocked') {
       // Search data exists — re-queue search to identify and re-download missing files
-      await searchQueue.add(queryToString({ id: Number(id) }), { query: { id: Number(id) } }, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-      })
+      await searchQueue.add(
+        queryToString({ id: Number(id) }),
+        { query: { id: Number(id) } },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        },
+      )
     } else {
       // Full restart from metadata scraping
-      await metadataQueue.add(queryToString({ id: Number(id) }), { query: { id: Number(id) } }, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-      })
+      await metadataQueue.add(
+        queryToString({ id: Number(id) }),
+        { query: { id: Number(id) } },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        },
+      )
     }
 
     const updated = await getQuery({ id: Number(id) })

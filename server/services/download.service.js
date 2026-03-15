@@ -253,12 +253,16 @@ function verifySearchResults(results, metadata) {
   const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   if (!isFresh) {
-    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`)
+    console.warn(
+      `[${queryToString({ id: metadata.id })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
+    )
     return false
   }
 
   if (results.length !== metadata.results) {
-    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`)
+    console.warn(
+      `[${queryToString({ id: metadata.id })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
+    )
     return false
   }
 
@@ -274,7 +278,9 @@ function verifySearchResults(results, metadata) {
   }
 
   if (duplicates.length > 0) {
-    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Found ${duplicates.length} duplicate items in the results.`)
+    console.warn(
+      `[${queryToString({ id: metadata.id })}] Warning: Found ${duplicates.length} duplicate items in the results.`,
+    )
     return false
   }
 
@@ -288,8 +294,6 @@ export async function removeQuery(params, { removeDownloads = true } = {}) {
     await fs.rm(dir, { recursive: true, force: true })
   }
 }
-
-// No filesystem metadata: remove readMetadataByName/removeQueryByName helpers
 
 export async function loadSearchResults(params = {}, { override = false } = {}) {
   if (!params || Object.keys(params).length === 0) {
@@ -341,10 +345,14 @@ function sanitizeFileName(name = '') {
 export function queryToString(params) {
   // Prefer numeric id as canonical filesystem key
   if (typeof params === 'number') return String(params)
-  if (params && (params.id !== undefined && params.id !== null)) return String(params.id)
+  if (params && params.id !== undefined && params.id !== null) return String(params.id)
   // Fallback to sanitized pageUrl if no id available (should be avoided)
   const url = params && (params.url || params.pageUrl)
-  if (url) return url.toString().trim().replace(/[^a-zA-Z0-9]/g, '_')
+  if (url)
+    return url
+      .toString()
+      .trim()
+      .replace(/[^a-zA-Z0-9]/g, '_')
   return ''
 }
 
@@ -403,4 +411,3 @@ export function verifyDownloads(downloads = new Set(), searchResults) {
 
   return { missingFiles }
 }
-

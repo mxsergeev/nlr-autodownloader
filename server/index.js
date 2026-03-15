@@ -1,5 +1,4 @@
 import app from './app.js'
-import { startDownloadsWatcher } from './services/download.service.js'
 import './workers/metadata.worker.js'
 import './workers/search.worker.js'
 import './workers/download.worker.js'

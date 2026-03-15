@@ -38,7 +38,9 @@ async function checkRedis() {
   } finally {
     try {
       await connection.quit()
-    } catch {}
+    } catch {
+      // Ignore errors on quit
+    }
   }
 }
 
