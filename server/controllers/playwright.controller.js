@@ -1,6 +1,13 @@
 import express from 'express'
-import { loadQueriesMetadata, queueQuery, queryToString } from '../services/download.service.js'
-import { metadataQueue } from '../queue.js'
+import {
+  loadQueriesMetadata,
+  queueQuery,
+  queryToString,
+  readMetadataByName,
+  removeQueryByName,
+  writeMetadata,
+} from '../services/download.service.js'
+import { metadataQueue, searchQueue } from '../queue.js'
 
 const router = express.Router()
 
@@ -57,6 +64,85 @@ router.post('/queue', async (req, res) => {
       message: error.message,
       name: error.name,
     })
+  }
+})
+
+router.get('/queue/:queryName', async (req, res) => {
+  try {
+    const { queryName } = req.params
+    const metadata = await readMetadataByName(queryName)
+
+    if (!metadata) {
+      return res.status(404).json({ error: 'Query not found' })
+    }
+
+    res.json({ metadata })
+  } catch (error) {
+    console.error('Query retrieval error:', error)
+    res.status(500).json({ error: 'Failed to retrieve query', message: error.message })
+  }
+})
+
+router.delete('/queue/:queryName', async (req, res) => {
+  try {
+    const { queryName } = req.params
+    const { removeDownloads } = req.query
+    const metadata = await readMetadataByName(queryName)
+
+    if (!metadata) {
+      return res.status(404).json({ error: 'Query not found' })
+    }
+
+    await removeQueryByName(queryName, { removeDownloads: removeDownloads === 'true' })
+
+    res.json({ removed: queryName })
+  } catch (error) {
+    console.error('Query removal error:', error)
+    res.status(500).json({ error: 'Failed to remove query', message: error.message })
+  }
+})
+
+router.post('/queue/:queryName/retry', async (req, res) => {
+  try {
+    const { queryName } = req.params
+    const metadata = await readMetadataByName(queryName)
+
+    if (!metadata) {
+      return res.status(404).json({ error: 'Query not found' })
+    }
+
+    const retryableStatuses = ['download_blocked', 'search_failed', 'pending']
+    if (!retryableStatuses.includes(metadata.status)) {
+      return res.status(400).json({
+        error: `Cannot retry query with status '${metadata.status}'`,
+        retryableStatuses,
+      })
+    }
+
+    const { query } = metadata
+    const originalStatus = metadata.status
+    metadata.status = 'pending'
+    await writeMetadata(query, metadata)
+
+    if (originalStatus === 'download_blocked') {
+      // Search data exists — re-queue search to identify and re-download missing files
+      await searchQueue.add(queryToString(query), { query }, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+      })
+    } else {
+      // Full restart from metadata scraping
+      await metadataQueue.add(queryToString(query), { query }, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+      })
+    }
+
+    const updated = await readMetadataByName(queryName)
+    res.json({ retried: queryName, metadata: updated })
+  } catch (error) {
+    console.error('Query retry error:', error)
+    res.status(500).json({ error: 'Failed to retry query', message: error.message })
   }
 })
 

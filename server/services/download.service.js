@@ -494,6 +494,18 @@ export async function removeQuery(params) {
   await fs.rm(dir, { recursive: true, force: true })
 }
 
+export async function readMetadataByName(queryName) {
+  const filePath = path.join(QUERY_DIR, queryName, `${queryName}.metadata.json`)
+  return JSON.parse(await fs.readFile(filePath, 'utf-8').catch(() => 'null'))
+}
+
+export async function removeQueryByName(queryName, { removeDownloads = false } = {}) {
+  await fs.rm(path.join(QUERY_DIR, queryName), { recursive: true, force: true })
+  if (removeDownloads) {
+    await fs.rm(path.join(DOWNLOADS_DIR, queryName), { recursive: true, force: true })
+  }
+}
+
 export async function loadSearchResults(params = {}, { override = false } = {}) {
   if (Object.keys(params).length === 0) {
     throw new Error('No search parameters provided.')
