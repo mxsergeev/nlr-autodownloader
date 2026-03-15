@@ -12,7 +12,7 @@ await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 })
 const QUERY_DIR = path.join(DATA_DIR, 'queries')
 await fs.mkdir(QUERY_DIR, { recursive: true, mode: 0o775 })
 
-const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
+export const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 })
 
 const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10) || 1
@@ -102,104 +102,7 @@ export async function loadQueriesMetadata() {
   return results
 }
 
-async function startExistingQueries() {
-  let metadataList = (await loadQueriesMetadata()).filter((m) => m.status !== 'search_failed')
-  let queriesCount = metadataList.length
 
-  // Ensure all queries are marked as 'pending' before starting downloads
-  for (const meta of metadataList) {
-    if (meta.status === 'pending') {
-      continue
-    }
-
-    meta.status = 'pending'
-    try {
-      await writeMetadata(meta.query, meta)
-    } catch (err) {
-      console.warn(`[${queryToString(meta.query)}] Failed to update status to 'pending': ${err.message}`)
-    }
-  }
-
-  while (queriesCount > 0) {
-    // Process all current queries with a concurrency limit so when one finishes we immediately
-    // start the next one instead of waiting for the whole batch to complete.
-
-    // Take a snapshot of the current queue
-    const queue = metadataList.splice(0)
-    const active = new Set()
-
-    const startTask = async (metadata) => {
-      try {
-        console.log(`[${queryToString(metadata.query)}] Starting`)
-        await download(metadata.query)
-      } catch (err) {
-        console.error(`[${queryToString(metadata.query)}] Error:`, err.message)
-      }
-    }
-
-    let idx = 0
-
-    // Start initial workers
-    for (; idx < CONCURRENT_DOWNLOADS && idx < queue.length; idx++) {
-      const metadata = queue[idx]
-      const p = startTask(metadata).finally(() => active.delete(p))
-      active.add(p)
-    }
-
-    // Whenever a worker finishes, start a new one until queue is exhausted
-    while (idx < queue.length) {
-      // Wait for any active promise to finish
-      await Promise.race(active)
-      const metadata = queue[idx++]
-      const p = startTask(metadata).finally(() => active.delete(p))
-      active.add(p)
-    }
-
-    // Wait for remaining active tasks to finish
-    await Promise.all(active)
-
-    metadataList = (await loadQueriesMetadata()).filter((m) => m.status !== 'search_failed')
-    queriesCount = metadataList.length
-  }
-}
-
-// Interval-based watcher for new queries
-let queryWatcherIntervalId = null
-let queryWatcherRunning = false
-const QUERY_WATCHER_INTERVAL = parseInt(process.env.QUERY_WATCHER_INTERVAL || '60000', 10)
-
-/**
- * Start a background watcher that periodically checks for new queries and resumes them.
- * intervalMs - milliseconds between checks (default from QUERY_WATCHER_INTERVAL env var)
- */
-export function startQueryWatcher(intervalMs = QUERY_WATCHER_INTERVAL) {
-  if (queryWatcherIntervalId) return
-
-  async function checkForQueries() {
-    if (queryWatcherRunning) return
-    queryWatcherRunning = true
-    try {
-      await startExistingQueries()
-    } catch (err) {
-      console.error('Error while checking for new queries:', err)
-    } finally {
-      queryWatcherRunning = false
-    }
-  }
-
-  // Run immediately, then periodically
-  checkForQueries()
-  queryWatcherIntervalId = setInterval(checkForQueries, intervalMs)
-  console.log(`Query watcher started (interval: ${intervalMs}ms)`)
-}
-
-export function stopQueryWatcher() {
-  if (!queryWatcherIntervalId) return
-  clearInterval(queryWatcherIntervalId)
-  queryWatcherIntervalId = null
-  queryWatcherRunning = false
-  console.log('Query watcher stopped')
-}
 
 // Downloads watcher: periodically generates a README.md in DOWNLOADS_DIR with progress info
 let downloadsWatcherIntervalId = null
@@ -398,13 +301,13 @@ async function scrapMetadata(params) {
   })
 }
 
-async function writeMetadata(params, metadata) {
+export async function writeMetadata(params, metadata) {
   await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
   const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
   await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2))
 }
 
-async function readMetadata(params) {
+export async function readMetadata(params) {
   try {
     const metadataPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
     const metadataContent = await fs.readFile(metadataPath, 'utf-8')
@@ -586,12 +489,12 @@ function verifySearchResults(results, metadata) {
   return true
 }
 
-async function removeQuery(params) {
+export async function removeQuery(params) {
   const dir = path.join(QUERY_DIR, queryToString(params))
   await fs.rm(dir, { recursive: true, force: true })
 }
 
-async function loadSearchResults(params = {}, { override = false } = {}) {
+export async function loadSearchResults(params = {}, { override = false } = {}) {
   if (Object.keys(params).length === 0) {
     throw new Error('No search parameters provided.')
   }
@@ -669,13 +572,13 @@ function sanitizeFileName(name = '') {
   }
 }
 
-function queryToString(params) {
+export function queryToString(params) {
   return Object.entries(params)
     .map(([, value]) => value.toString().trim().replace(/\s+/g, '_'))
     .join('_')
 }
 
-async function scrapDownload(item, storageDir) {
+export async function scrapDownload(item, storageDir) {
   return runJob(async (page) => {
     let page1 = null
     let page2 = null
@@ -715,7 +618,7 @@ async function scrapDownload(item, storageDir) {
   })
 }
 
-async function getDownloadedFileNames(params) {
+export async function getDownloadedFileNames(params) {
   const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
   try {
     return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name))
@@ -725,109 +628,10 @@ async function getDownloadedFileNames(params) {
   }
 }
 
-function verifyDownloads(downloads = new Set(), searchResults) {
+export function verifyDownloads(downloads = new Set(), searchResults) {
   const missingFiles = searchResults.filter((item) => !downloads.has(item.fileName))
 
   return { missingFiles }
 }
 
-async function download(params = {}) {
-  let searchResults = null
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      searchResults = await loadSearchResults(params)
-      break
-    } catch (err) {
-      console.log('err', err)
-      if (attempt === 3) {
-        console.error(`[${queryToString(params)}] Failed to load search results after multiple attempts.`)
-        const metadata = await readMetadata(params)
-        metadata.status = 'search_failed'
-        await writeMetadata(params, metadata)
-        return
-      }
-
-      // Wait before retrying
-      await new Promise((resolve) => setTimeout(resolve, 5000))
-    }
-  }
-
-  const storageDir = path.join(DOWNLOADS_DIR, queryToString(params))
-  await fs.mkdir(storageDir, { recursive: true, mode: 0o775 })
-
-  // Track failure timestamps and abort only if 10 failures occur within the last 5 minutes
-  const FAILURE_WINDOW_MS = 5 * 60 * 1000
-  let failTimestamps = []
-
-  while (searchResults !== null) {
-    const now = Date.now()
-    // Keep only failures within the sliding 5-minute window
-    failTimestamps = failTimestamps.filter((t) => now - t <= FAILURE_WINDOW_MS)
-
-    if (failTimestamps.length >= 10) {
-      console.warn(
-        `[${queryToString(params)}] Aborting downloads: ${failTimestamps.length} failures within the last ${FAILURE_WINDOW_MS / 60000} minutes.`,
-      )
-      break
-    }
-
-    let downloads = await getDownloadedFileNames(params)
-    let { missingFiles } = verifyDownloads(downloads, searchResults)
-
-    if (missingFiles.length === 0) {
-      break
-    }
-
-    for (const item of missingFiles) {
-      const metadata = await readMetadata(params)
-      metadata.lastAttempt = new Date().toISOString()
-
-      try {
-        await scrapDownload(item, storageDir)
-
-        console.log(`[${queryToString(params)}] Downloaded: ${item.fileName}`)
-
-        downloads = await getDownloadedFileNames(params)
-        missingFiles = verifyDownloads(downloads, searchResults).missingFiles
-
-        const total = metadata.results || 1
-
-        metadata.status = 'downloading'
-        metadata.downloaded = downloads.size
-        metadata.downloadProgress = parseFloat((((total - missingFiles.length) / total) * 100).toFixed(2)) + '%'
-
-        console.log(
-          `[${queryToString(params)}] Progress: ${downloads.size} / ${metadata.results} (${metadata.downloadProgress})`,
-        )
-      } catch (err) {
-        // Record failure timestamp and log
-        failTimestamps.push(Date.now())
-
-        console.error(`[${queryToString(params)}] Failed to download: ${item.fileName}. Reason: ${err.message}`)
-
-        metadata.status = 'download_blocked'
-
-        break
-      } finally {
-        await writeMetadata(params, metadata)
-      }
-    }
-  }
-
-  const { missingFiles } = verifyDownloads(await getDownloadedFileNames(params), searchResults)
-
-  let msg = ''
-
-  if (missingFiles.length > 0) {
-    msg = `[${queryToString(params)}] Failed to download ${missingFiles.length} items.}`
-
-    console.warn(msg)
-  } else {
-    msg = `[${queryToString(params)}] All items downloaded successfully.`
-
-    await removeQuery(params)
-
-    console.log(msg)
-  }
-}

@@ -1,5 +1,6 @@
 import express from 'express'
-import { loadQueriesMetadata, queueQuery } from '../services/download.service.js'
+import { loadQueriesMetadata, queueQuery, queryToString } from '../services/download.service.js'
+import { metadataQueue } from '../queue.js'
 
 const router = express.Router()
 
@@ -37,11 +38,13 @@ router.post('/queue', async (req, res) => {
       .filter(Boolean)
 
     const qsResults = await Promise.allSettled(
-      qs.map((q, index) =>
-        queueQuery(q, { order: index }).catch((err) => {
-          throw Object.assign(err, { query: q })
-        }),
-      ),
+      qs.map(async (q, index) => {
+        await queueQuery(q, { order: index })
+        await metadataQueue.add(queryToString(q), { query: q }, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        })
+      })
     )
 
     const queue = await loadQueriesMetadata()
