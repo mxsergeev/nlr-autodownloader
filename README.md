@@ -4,57 +4,61 @@ Crawl and download documents from the National Library of Russia using Playwrigh
 
 ## Run and test
 
-This project can be run with Docker Compose (recommended) or locally for development.
+This project is developed and run with Docker Compose (recommended).
 
-### 1) Using Docker Compose
+### Development with Docker Compose
 
-- Build and start services:
+1. Copy environment example and adjust as needed:
 
-  docker-compose up --build
+   cp .env.example .env
 
-- Service will be available at http://localhost:${SERVER_PORT:-3333}
-- Quick check: curl http://localhost:3333/health (returns {"status":"ok"})
+   Edit `.env` to set `NODE_ENV=development` for hot-reload during development.
 
-### 2) Local development (without Docker)
+2. Build and start services (server + redis):
 
-- Install dependencies and Playwright browsers:
+   docker-compose up --build
 
-  cd server
-  npm install
-  npx playwright install-deps
-  npm run install-browsers
+   This builds the server image (the Dockerfile installs Playwright dependencies and Firefox) and starts Redis.
 
-- Start Redis (example using Docker):
+3. Access the server at http://localhost:${SERVER_PORT:-3333}
 
-  docker run -d --name redis -p 6379:6379 -e REDIS_PASSWORD=1234 redis:8.6.1-alpine --requirepass 1234
+4. Iterative development (hot reload):
+   - Ensure `NODE_ENV=development` in `.env` so the container runs `npm run dev` (nodemon).
+   - Code changes on the host are mounted into the container (see docker-compose.yml), so changes reload automatically.
+   - To rebuild the server image after changing dependencies or package.json:
 
-- Copy environment example and edit as needed:
+     docker-compose up --build --force-recreate --no-deps server
 
-  cp ../.env.example ../.env
+5. Running helper commands inside the running container:
+   - Install browsers (only needed when changing Playwright install target):
 
-- Start server in dev mode:
+     docker-compose exec server npm run install-browsers
 
-  npm run dev
+   - Run the smoke test:
 
-- Verify health endpoint:
+     docker-compose exec server npm run smoke
 
-  curl http://localhost:3333/health
+   - Run lint:
 
-### 3) Smoke test
+     docker-compose exec server npm run lint
 
-A lightweight smoke test is provided to help automated tooling and AIs verify the app is up and can reach Redis.
+6. Quick health check from host:
 
-From the `server` directory run:
+   curl http://localhost:3333/health # returns {"status":"ok"}
 
-npm run smoke
+### Smoke test
 
-This checks the /health endpoint and attempts a PING to Redis. Exit code 0 indicates success.
+A lightweight smoke test verifies the HTTP health endpoint and Redis connectivity. Run it inside the server container:
+
+docker-compose exec server npm run smoke
+
+Exit code 0 indicates success.
 
 ### Notes
 
 - `.env.example` exists at the repo root and contains the environment variables used by the server.
-- To run Playwright-driven downloads, a full Firefox installation is required (see `npm run install-browsers`).
-- No CI is added; use the smoke script in CI or other automation as desired.
+- Data and downloads are mounted to `./data/downloads` by default (see docker-compose.yml).
+- The Dockerfile already installs Playwright and Firefox at image build time; running `npm run install-browsers` inside the container can be used to re-install if needed.
 
 ## Setup
 
@@ -103,7 +107,7 @@ GET /playwright/queue
 POST /playwright/queue
 Content-Type: application/json
 
-{ "queries": [{ "q": "поиск", "year": 2020 }] }
+{ "queries": [{ "q": "search", "year": 2020 }] }
 ```
 
 ### Get single query status
