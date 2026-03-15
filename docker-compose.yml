@@ -17,8 +17,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      frontend:
+        condition: service_started
     restart: unless-stopped
     command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
+
+  frontend:
+    build:
+      context: ./frontend
+    env_file:
+      - .env
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev -- --host 0.0.0.0; else npm run build && npm run start -- --port 5173 --host 0.0.0.0; fi'
 
   redis:
     image: redis:8.6.1-alpine
