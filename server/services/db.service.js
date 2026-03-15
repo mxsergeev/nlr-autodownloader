@@ -3,23 +3,23 @@ import { PrismaClient } from '@prisma/client'
 export const prisma = new PrismaClient()
 
 /**
- * Returns the query record for the given params, shaped like the legacy metadata JSON.
+ * Returns the Prisma Query record for the given params.
  * @param {{ q: string, year: number }} params
  */
 export async function getQuery(params) {
   const record = await prisma.query.findUnique({
     where: { q_year: { q: params.q, year: Number(params.year) } },
   })
-  return record ? toMetadata(record) : null
+  return record ?? null
 }
 
 /**
- * Creates or updates the query record from a metadata-shaped object.
+ * Creates or updates the query record from a Prisma-shaped object.
  * @param {{ q: string, year: number }} params
- * @param {object} metadata  Legacy metadata shape (see toMetadata / fromMetadata)
+ * @param {object} metadata  Prisma-compatible fields (results, resultsPerPart, parts, pageUrl, createdAt, order, status, lastAttempt, downloaded, downloadProgress)
  */
 export async function upsertQuery(params, metadata) {
-  const data = fromMetadata(metadata)
+  const data = normalize(metadata)
   return prisma.query.upsert({
     where: { q_year: { q: params.q, year: Number(params.year) } },
     create: { q: params.q, year: Number(params.year), ...data },
@@ -28,11 +28,11 @@ export async function upsertQuery(params, metadata) {
 }
 
 /**
- * Returns all query records sorted by order ascending, shaped like legacy metadata JSON.
+ * Returns all query records sorted by order ascending.
  */
 export async function getAllQueries() {
   const records = await prisma.query.findMany({ orderBy: { order: 'asc' } })
-  return records.map(toMetadata)
+  return records
 }
 
 /**
@@ -85,36 +85,19 @@ export async function saveSearchResults(params, results) {
 }
 
 // ---------------------------------------------------------------------------
-// Shape converters
+// Helpers
 // ---------------------------------------------------------------------------
 
-/** Maps a Prisma Query record to the legacy metadata JSON shape. */
-function toMetadata(record) {
-  return {
-    query: { q: record.q, year: record.year },
-    results: record.results,
-    resultsPerPart: record.resultsPerPart,
-    parts: record.parts,
-    pageUrl: record.pageUrl,
-    createdAt: record.createdAt?.toISOString() ?? null,
-    order: Number(record.order),
-    status: record.status,
-    lastAttempt: record.lastAttempt?.toISOString() ?? null,
-    downloaded: record.downloaded,
-    downloadProgress: record.downloadProgress,
-  }
-}
-
-/** Maps legacy metadata fields to Prisma-compatible data fields. */
-function fromMetadata(metadata) {
+function normalize(metadata) {
   return {
     results: metadata.results ?? null,
     resultsPerPart: metadata.resultsPerPart ?? null,
     parts: metadata.parts ?? null,
     pageUrl: metadata.pageUrl ?? null,
-    order: BigInt(metadata.order ?? 0),
+    createdAt: metadata.createdAt ? new Date(metadata.createdAt) : (metadata.createdAt ?? undefined),
+    order: metadata.order !== undefined ? BigInt(metadata.order) : undefined,
     status: metadata.status ?? 'pending',
-    lastAttempt: metadata.lastAttempt ? new Date(metadata.lastAttempt) : null,
+    lastAttempt: metadata.lastAttempt ? new Date(metadata.lastAttempt) : (metadata.lastAttempt ?? null),
     downloaded: metadata.downloaded ?? 0,
     downloadProgress: metadata.downloadProgress ?? null,
   }

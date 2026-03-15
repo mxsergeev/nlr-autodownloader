@@ -128,7 +128,10 @@ export function stopDownloadsWatcher() {
 
 async function generateDownloadsReport() {
   const metadataList = await loadQueriesMetadata()
-  const metadataMap = new Map(metadataList.map((m) => [queryToString(m.query), m]))
+  // Convert prisma records into a map keyed by the query string (q_year). Ensure order is a Number for in-memory sorting.
+  const metadataMap = new Map(
+    metadataList.map((m) => [queryToString({ q: m.q, year: m.year }), { ...m, order: m.order !== undefined ? Number(m.order) : 0 }]),
+  )
 
   const entries = await fs.readdir(DOWNLOADS_DIR, { withFileTypes: true }).catch(() => [])
   const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
@@ -167,7 +170,7 @@ async function generateDownloadsReport() {
       downloaded,
       total,
       progress,
-      order: meta.order || 0,
+      order: Number(meta.order) || 0,
     })
   }
 
@@ -180,7 +183,7 @@ async function generateDownloadsReport() {
         downloaded: 0,
         total: meta.results || 0,
         progress: meta.results ? '0.00%' : 'N/A',
-        order: meta.order || 0,
+        order: Number(meta.order) || 0,
       })
     }
   }
@@ -273,7 +276,8 @@ async function scrapMetadata(params) {
     const pageUrl = page.url()
 
     const metadata = {
-      query: params,
+      q: params.q,
+      year: Number(params.year),
       results: resultNumber,
       resultsPerPart,
       parts,
@@ -302,8 +306,9 @@ export async function loadMetadata(params) {
   try {
     const metadata = await scrapMetadata(params)
 
-    metadata.createdAt = existingMetadata?.createdAt ?? new Date().toISOString()
-    metadata.order = existingMetadata?.order ?? Date.now()
+    // Use Date objects in the new Prisma format for createdAt, and normalize order to Number for in-memory logic
+    metadata.createdAt = existingMetadata?.createdAt ?? new Date()
+    metadata.order = existingMetadata ? Number(existingMetadata.order) : Date.now()
     metadata.status = 'pending'
 
     await writeMetadata(params, metadata)
@@ -322,19 +327,20 @@ export async function loadMetadata(params) {
 
 /**
  * Queue a query without performing heavy scraping now.
- * Creates a minimal metadata file with status 'pending' so the query is resumed on server start or by the watcher.
+ * Creates a minimal metadata record with status 'pending' so the query is resumed on server start or by the watcher.
  */
 export async function queueQuery(params, { order = 0 } = {}) {
   const existing = await readMetadata(params)
   if (existing && existing.status !== 'search_failed') return existing
 
   const metadata = {
-    query: params,
+    q: params.q,
+    year: Number(params.year),
     results: null,
     resultsPerPart: null,
     parts: null,
     pageUrl: null,
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
     order: Date.now() + order,
     status: 'pending',
   }
@@ -427,18 +433,19 @@ async function getPartFileNames(params) {
 }
 
 function verifySearchResults(results, metadata) {
-  const isFresh = metadata.createdAt && new Date(metadata.createdAt) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+  const createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null
+  const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   if (!isFresh) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
     )
     return false
   }
 
   if (results.length !== metadata.results) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
     )
     return false
   }
@@ -456,7 +463,7 @@ function verifySearchResults(results, metadata) {
 
   if (duplicates.length > 0) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Found ${duplicates.length} duplicate items in the results.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Found ${duplicates.length} duplicate items in the results.`,
     )
     return false
   }
