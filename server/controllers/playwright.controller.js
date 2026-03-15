@@ -3,9 +3,9 @@ import {
   loadQueriesMetadata,
   queueQuery,
   queryToString,
-  readMetadataByName,
-  removeQueryByName,
   writeMetadata,
+  readMetadata,
+  removeQuery,
 } from '../services/download.service.js'
 import { metadataQueue, searchQueue } from '../queue.js'
 
@@ -34,25 +34,30 @@ router.post('/queue', async (req, res) => {
       return res.status(400).json({ error: 'No queries provided' })
     }
 
-    const qs = queries
-      .map((q) => {
-        if (!q.q || !q.year) {
-          return null
-        }
-
-        return { q: q.q, year: q.year }
-      })
-      .filter(Boolean)
-
-    const qsResults = await Promise.allSettled(
-      qs.map(async (q, index) => {
-        await queueQuery(q, { order: index })
-        await metadataQueue.add(queryToString(q), { query: q }, {
+    const ops = queries.map(async (q, index) => {
+      // Accept { id } or { url }
+      if (q.id) {
+        const record = await queueQuery({ id: q.id }, { order: index })
+        await metadataQueue.add(queryToString({ id: record.id }), { query: { id: record.id } }, {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5000 },
         })
-      })
-    )
+        return { ok: true, id: record.id }
+      }
+
+      if (q.url) {
+        const record = await queueQuery({ url: q.url }, { order: index })
+        await metadataQueue.add(queryToString({ id: record.id }), { query: { id: record.id } }, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        })
+        return { ok: true, id: record.id }
+      }
+
+      return { ok: false, error: 'Invalid query object' }
+    })
+
+    const qsResults = await Promise.allSettled(ops)
 
     const queue = await loadQueriesMetadata()
 
@@ -67,10 +72,10 @@ router.post('/queue', async (req, res) => {
   }
 })
 
-router.get('/queue/:queryName', async (req, res) => {
+router.get('/queue/:id', async (req, res) => {
   try {
-    const { queryName } = req.params
-    const metadata = await readMetadataByName(queryName)
+    const { id } = req.params
+    const metadata = await readMetadata({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -83,29 +88,29 @@ router.get('/queue/:queryName', async (req, res) => {
   }
 })
 
-router.delete('/queue/:queryName', async (req, res) => {
+router.delete('/queue/:id', async (req, res) => {
   try {
-    const { queryName } = req.params
+    const { id } = req.params
     const { removeDownloads } = req.query
-    const metadata = await readMetadataByName(queryName)
+    const metadata = await readMetadata({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
     }
 
-    await removeQueryByName(queryName, { removeDownloads: removeDownloads === 'true' })
+    await removeQuery({ id: Number(id) }, { removeDownloads: removeDownloads === 'true' })
 
-    res.json({ removed: queryName })
+    res.json({ removed: Number(id) })
   } catch (error) {
     console.error('Query removal error:', error)
     res.status(500).json({ error: 'Failed to remove query', message: error.message })
   }
 })
 
-router.post('/queue/:queryName/retry', async (req, res) => {
+router.post('/queue/:id/retry', async (req, res) => {
   try {
-    const { queryName } = req.params
-    const metadata = await readMetadataByName(queryName)
+    const { id } = req.params
+    const metadata = await readMetadata({ id: Number(id) })
 
     if (!metadata) {
       return res.status(404).json({ error: 'Query not found' })
@@ -119,27 +124,26 @@ router.post('/queue/:queryName/retry', async (req, res) => {
       })
     }
 
-    const { query } = metadata
     const originalStatus = metadata.status
     metadata.status = 'pending'
-    await writeMetadata(query, metadata)
+    await writeMetadata({ id: Number(id) }, metadata)
 
     if (originalStatus === 'download_blocked') {
       // Search data exists — re-queue search to identify and re-download missing files
-      await searchQueue.add(queryToString(query), { query }, {
+      await searchQueue.add(queryToString({ id: Number(id) }), { query: { id: Number(id) } }, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
       })
     } else {
       // Full restart from metadata scraping
-      await metadataQueue.add(queryToString(query), { query }, {
+      await metadataQueue.add(queryToString({ id: Number(id) }), { query: { id: Number(id) } }, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
       })
     }
 
-    const updated = await readMetadataByName(queryName)
-    res.json({ retried: queryName, metadata: updated })
+    const updated = await readMetadata({ id: Number(id) })
+    res.json({ retried: Number(id), metadata: updated })
   } catch (error) {
     console.error('Query retry error:', error)
     res.status(500).json({ error: 'Failed to retry query', message: error.message })

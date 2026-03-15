@@ -17,9 +17,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '..', '..', 'data')
 await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 })
 
-const QUERY_DIR = path.join(DATA_DIR, 'queries')
-await fs.mkdir(QUERY_DIR, { recursive: true, mode: 0o775 })
-
 export const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 })
 
@@ -85,18 +82,11 @@ export async function loadQueriesMetadata() {
   return getAllQueries()
 }
 
-
-
 // Downloads watcher: periodically generates a README.md in DOWNLOADS_DIR with progress info
 let downloadsWatcherIntervalId = null
 let downloadsWatcherRunning = false
 const DOWNLOADS_WATCHER_INTERVAL = parseInt(process.env.DOWNLOADS_WATCHER_INTERVAL || '60000', 10)
 
-/**
- * Start a background watcher that periodically scans DOWNLOADS_DIR and writes a README.md
- * The README contains a table with progress for each query folder. If a folder exists in
- * DOWNLOADS_DIR but has no corresponding metadata it is considered 'completed'.
- */
 export function startDownloadsWatcher(intervalMs = DOWNLOADS_WATCHER_INTERVAL) {
   if (downloadsWatcherIntervalId) return
 
@@ -128,9 +118,9 @@ export function stopDownloadsWatcher() {
 
 async function generateDownloadsReport() {
   const metadataList = await loadQueriesMetadata()
-  // Convert prisma records into a map keyed by the query string (q_year). Ensure order is a Number for in-memory sorting.
+  // Convert prisma records into a map keyed by the query id string. Ensure order is a Number for in-memory sorting.
   const metadataMap = new Map(
-    metadataList.map((m) => [queryToString({ q: m.q, year: m.year }), { ...m, order: m.order !== undefined ? Number(m.order) : 0 }]),
+    metadataList.map((m) => [queryToString({ id: m.id }), { ...m, order: m.order !== undefined ? Number(m.order) : 0 }]),
   )
 
   const entries = await fs.readdir(DOWNLOADS_DIR, { withFileTypes: true }).catch(() => [])
@@ -228,28 +218,15 @@ async function generateDownloadsReport() {
 }
 
 async function scrapMetadata(params) {
-  console.log(`[${queryToString(params)}] Scraping metadata`)
+  // Try to find existing record to get pageUrl if needed
+  const existing = await getQuery(params)
+  const pageUrl = params && params.url ? params.url : existing?.pageUrl
+  if (!pageUrl) throw new Error('No pageUrl provided to scrap metadata')
+
+  console.log(`[${queryToString(params)}] Scraping metadata for ${pageUrl}`)
 
   return runJob(async (page) => {
-    await page.goto('https://primo.nlr.ru/')
-
-    await page.getByRole('button', { name: 'Перейти к расширенному поиску' }).click()
-
-    await page.getByRole('button', { name: 'Выберите точную операцию для сложного номера строки 1 содержит' }).click()
-    await page.getByRole('option', { name: 'совпадает' }).click()
-    await page.getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 1' }).click()
-    await page.getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 1' }).fill(params.q)
-
-    await page.getByRole('button', { name: 'Выберите поле поиска для сложного номера строки 2' }).click()
-    await page.getByRole('option', { name: 'Год издания' }).click()
-    await page.getByRole('button', { name: 'Выберите точную операцию для сложного номера строки 2 совпадает' }).click()
-    await page.getByRole('option', { name: 'совпадает' }).click()
-    await page.getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 2' }).click()
-    await page
-      .getByRole('textbox', { name: 'Введите поисковый запрос для сложного номера строки 2' })
-      .fill(params.year.toString())
-
-    await page.getByRole('button', { name: 'Отправить поиск' }).click()
+    await page.goto(pageUrl)
 
     await page
       .getByRole('button', { name: 'Сортировать по Релевантность' })
@@ -273,15 +250,13 @@ async function scrapMetadata(params) {
 
     const parts = resultNumber ? Math.ceil(resultNumber / resultsPerPart) : 1
 
-    const pageUrl = page.url()
+    const finalUrl = page.url()
 
     const metadata = {
-      q: params.q,
-      year: Number(params.year),
       results: resultNumber,
       resultsPerPart,
       parts,
-      pageUrl,
+      pageUrl: finalUrl,
     }
 
     return metadata
@@ -289,7 +264,7 @@ async function scrapMetadata(params) {
 }
 
 export async function writeMetadata(params, metadata) {
-  await upsertQuery(params, metadata)
+  return upsertQuery(params, metadata)
 }
 
 export async function readMetadata(params) {
@@ -311,13 +286,12 @@ export async function loadMetadata(params) {
     metadata.order = existingMetadata ? Number(existingMetadata.order) : Date.now()
     metadata.status = 'pending'
 
-    await writeMetadata(params, metadata)
-
-    return metadata
+    // Persist metadata using pageUrl as key (upsert will create or update as needed)
+    const updated = await upsertQuery({ url: metadata.pageUrl }, metadata)
+    return updated
   } catch (err) {
     if (existingMetadata && err.message.includes('No results found')) {
       console.warn(`[${queryToString(params)}] No results found, removing query.`)
-
       await removeQuery(params)
     }
 
@@ -333,20 +307,37 @@ export async function queueQuery(params, { order = 0 } = {}) {
   const existing = await readMetadata(params)
   if (existing && existing.status !== 'search_failed') return existing
 
-  const metadata = {
-    q: params.q,
-    year: Number(params.year),
-    results: null,
-    resultsPerPart: null,
-    parts: null,
-    pageUrl: null,
-    createdAt: new Date(),
-    order: Date.now() + order,
-    status: 'pending',
+  if (params && params.id) {
+    // Re-queue existing record by id
+    const meta = {
+      results: existing?.results ?? null,
+      resultsPerPart: existing?.resultsPerPart ?? null,
+      parts: existing?.parts ?? null,
+      pageUrl: existing?.pageUrl ?? null,
+      createdAt: existing?.createdAt ?? new Date(),
+      order: Date.now() + order,
+      status: 'pending',
+    }
+    await upsertQuery({ id: params.id }, meta)
+    return await readMetadata({ id: params.id })
   }
 
-  await writeMetadata(params, metadata)
-  return metadata
+  if (params && params.url) {
+    const metadata = {
+      results: null,
+      resultsPerPart: null,
+      parts: null,
+      pageUrl: params.url,
+      createdAt: new Date(),
+      order: Date.now() + order,
+      status: 'pending',
+    }
+
+    const record = await upsertQuery({ url: params.url }, metadata)
+    return record
+  }
+
+  throw new Error('Invalid params for queueQuery; expected id or url')
 }
 
 async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls = new Set() } = {}) {
@@ -356,15 +347,10 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
 
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls)
+    const results = []
 
-    for (let curPart = 1; curPart <= metadata.parts; curPart++) {
-      if (doneParts.has(curPart)) {
-        continue
-      }
-
+    for (let curPart = 1; curPart <= (metadata.parts || 1); curPart++) {
       await page.goto(metadata.pageUrl.replace(/offset=\d+/, `offset=${(curPart - 1) * metadata.resultsPerPart}`))
-
-      const part = []
 
       await page.waitForSelector('.item-title', { timeout: 15000 })
 
@@ -372,7 +358,6 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
       const headingData = await headings.evaluateAll((elements) => {
         return elements.map((element) => {
           const anchor = element.querySelector('a')
-          // Clean up text: remove leading special chars, trim, and normalize whitespace
           const rawText = element.textContent.trim()
           const cleanText = rawText.replace(/^[=\s]+/, '').replace(/\s+/g, ' ')
 
@@ -383,53 +368,23 @@ async function scrapSearchResults(params, { doneParts = new Set(), scrapedUrls =
         })
       })
 
-      // Generate fileName in Node context where sanitizeFileName is defined
       headingData.forEach((item) => {
         item.fileName = sanitizeFileName(item.title)
       })
 
-      // Only add items we haven't seen before
       for (const item of headingData) {
         if (item.href && !seenUrls.has(item.href)) {
           seenUrls.add(item.href)
-
-          part.push(item)
+          results.push(item)
         }
       }
-
-      const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.part${curPart}.json`)
-      await fs.writeFile(outputPath, JSON.stringify(part, null, 2))
     }
+
+    // Persist results to DB
+    await saveSearchResults(params, results)
+
+    return results
   })
-}
-
-async function getPartFileNames(params) {
-  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
-  const dir = path.join(QUERY_DIR, queryToString(params))
-  const partNames = (await fs.readdir(dir, { withFileTypes: true }))
-    .filter(
-      (f) =>
-        f.isFile() &&
-        // Only include files that follow the <query>.partN.json pattern
-        f.name.startsWith(`${queryToString(params)}.part`) &&
-        /\.part\d+\.json$/.test(f.name),
-    )
-    .map((f) => path.parse(f.name))
-    // Sort by numeric part suffix (natural numeric order for .part1, .part2 ... .part10)
-    .sort((a, b) => {
-      const re = /\.part(\d+)$/
-      const ma = a.name.match(re)
-      const mb = b.name.match(re)
-
-      if (ma && mb) {
-        return parseInt(ma[1], 10) - parseInt(mb[1], 10)
-      }
-
-      // Fallback to name compare
-      return a.name.localeCompare(b.name)
-    })
-
-  return partNames
 }
 
 function verifySearchResults(results, metadata) {
@@ -437,16 +392,12 @@ function verifySearchResults(results, metadata) {
   const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   if (!isFresh) {
-    console.warn(
-      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
-    )
+    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`)
     return false
   }
 
   if (results.length !== metadata.results) {
-    console.warn(
-      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
-    )
+    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`)
     return false
   }
 
@@ -462,35 +413,25 @@ function verifySearchResults(results, metadata) {
   }
 
   if (duplicates.length > 0) {
-    console.warn(
-      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Found ${duplicates.length} duplicate items in the results.`,
-    )
+    console.warn(`[${queryToString({ id: metadata.id })}] Warning: Found ${duplicates.length} duplicate items in the results.`)
     return false
   }
 
   return true
 }
 
-export async function removeQuery(params) {
+export async function removeQuery(params, { removeDownloads = true } = {}) {
   await dbDeleteQuery(params)
-  const dir = path.join(QUERY_DIR, queryToString(params))
-  await fs.rm(dir, { recursive: true, force: true })
-}
-
-export async function readMetadataByName(queryName) {
-  const filePath = path.join(QUERY_DIR, queryName, `${queryName}.metadata.json`)
-  return JSON.parse(await fs.readFile(filePath, 'utf-8').catch(() => 'null'))
-}
-
-export async function removeQueryByName(queryName, { removeDownloads = false } = {}) {
-  await fs.rm(path.join(QUERY_DIR, queryName), { recursive: true, force: true })
   if (removeDownloads) {
-    await fs.rm(path.join(DOWNLOADS_DIR, queryName), { recursive: true, force: true })
+    const dir = path.join(DOWNLOADS_DIR, queryToString(params))
+    await fs.rm(dir, { recursive: true, force: true })
   }
 }
 
+// No filesystem metadata: remove readMetadataByName/removeQueryByName helpers
+
 export async function loadSearchResults(params = {}, { override = false } = {}) {
-  if (Object.keys(params).length === 0) {
+  if (!params || Object.keys(params).length === 0) {
     throw new Error('No search parameters provided.')
   }
 
@@ -504,41 +445,13 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
     }
   }
 
-  const dir = path.join(QUERY_DIR, queryToString(params))
-
-  let partNames = await getPartFileNames(params)
-
-  // Parse what parts are already done
-  const doneParts = new Set()
-  for (const part of partNames) {
-    const match = part.name.match(/\.part(\d+)$/)
-    if (match) {
-      doneParts.add(parseInt(match[1], 10))
-    }
-  }
-
-  await scrapSearchResults(params, { doneParts })
-
-  partNames = await getPartFileNames(params)
-
-  const resultParts = await Promise.all(
-    partNames.map((p) => fs.readFile(path.join(dir, p.base), 'utf8').then(JSON.parse)),
-  )
-
-  const results = resultParts.flat()
+  const results = await scrapSearchResults(params)
 
   const metadata = await loadMetadata(params)
 
   if (!verifySearchResults(results, metadata)) {
     throw new Error('Search results verification failed.')
   }
-
-  // Clean up query parts
-  for (const part of partNames) {
-    await fs.unlink(path.join(dir, part.base))
-  }
-
-  await saveSearchResults(params, results)
 
   return results
 }
@@ -565,9 +478,13 @@ function sanitizeFileName(name = '') {
 }
 
 export function queryToString(params) {
-  return Object.entries(params)
-    .map(([, value]) => value.toString().trim().replace(/\s+/g, '_'))
-    .join('_')
+  // Prefer numeric id as canonical filesystem key
+  if (typeof params === 'number') return String(params)
+  if (params && (params.id !== undefined && params.id !== null)) return String(params.id)
+  // Fallback to sanitized pageUrl if no id available (should be avoided)
+  const url = params && (params.url || params.pageUrl)
+  if (url) return url.toString().trim().replace(/[^a-zA-Z0-9]/g, '_')
+  return ''
 }
 
 export async function scrapDownload(item, storageDir) {
@@ -625,5 +542,4 @@ export function verifyDownloads(downloads = new Set(), searchResults) {
 
   return { missingFiles }
 }
-
 

@@ -17,13 +17,11 @@ enum QueryStatus {
 
 model Query {
   id               Int           @id @default(autoincrement())
-  q                String
-  year             Int
+  pageUrl          String        @unique
   status           QueryStatus   @default(pending)
   results          Int?
   resultsPerPart   Int?
   parts            Int?
-  pageUrl          String?
   /// Numeric sort key — stored as Date.now() + offset, so needs BigInt
   order            BigInt        @default(0)
   createdAt        DateTime      @default(now())
@@ -33,8 +31,6 @@ model Query {
   downloadProgress String?
 
   searchResults SearchResult[]
-
-  @@unique([q, year])
 }
 
 model SearchResult {
