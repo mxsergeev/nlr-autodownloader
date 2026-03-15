@@ -1,18 +1,9 @@
-import React, { useState } from 'react'
+import React from 'react'
 import axios from 'axios'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import {
-  Container,
-  Box,
-  TextField,
-  Button,
-  Typography,
-  List,
-  ListItem,
-  ListItemText,
-  CircularProgress,
-  Alert,
-} from '@mui/material'
+import { Container, Typography, CircularProgress, Alert } from '@mui/material'
+import AddQueryForm from './components/AddQueryForm'
+import QueueList from './components/QueueList'
 
 const fetchQueue = async () => {
   const { data } = await axios.get('/playwright/queue')
@@ -21,35 +12,29 @@ const fetchQueue = async () => {
 
 export default function App() {
   const qc = useQueryClient()
-  const [q, setQ] = useState('')
-  const [year, setYear] = useState('')
 
   const {
     data: queue = [],
     isLoading,
     isError,
-  } = useQuery(['queue'], fetchQueue, {
+  } = useQuery({
+    queryKey: ['queue'],
+    queryFn: fetchQueue,
     refetchInterval: 3000,
   })
 
-  const mutation = useMutation(
-    async (newQuery) => {
+  const mutation = useMutation({
+    mutationFn: async (url) => {
       const { data } = await axios.post('/playwright/queue', {
-        queries: [newQuery],
+        queries: [{ url }],
       })
       return data
     },
-    {
-      onSuccess: () => qc.invalidateQueries(['queue']),
-    },
-  )
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+  })
 
-  const handleAdd = (e) => {
-    e?.preventDefault()
-    if (!q || !year) return
-    mutation.mutate({ q, year: Number(year) })
-    setQ('')
-    setYear('')
+  const handleAddUrl = (url) => {
+    mutation.mutate(url)
   }
 
   return (
@@ -58,25 +43,7 @@ export default function App() {
         NLR Autodownloader — Queue
       </Typography>
 
-      <Box component="form" onSubmit={handleAdd} sx={{ display: 'flex', gap: 2, mb: 3 }}>
-        <TextField
-          label="Query / URL"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search phrase or Primo URL"
-          fullWidth
-        />
-        <TextField
-          label="Year"
-          value={year}
-          onChange={(e) => setYear(e.target.value)}
-          sx={{ width: 120 }}
-          type="number"
-        />
-        <Button variant="contained" type="submit" disabled={mutation.isLoading}>
-          Add
-        </Button>
-      </Box>
+      <AddQueryForm onSubmitUrl={handleAddUrl} isSubmitting={mutation.isLoading} />
 
       {mutation.isError && <Alert severity="error">Failed to add: {mutation.error?.message}</Alert>}
       {mutation.isSuccess && <Alert severity="success">Query added</Alert>}
@@ -86,16 +53,7 @@ export default function App() {
       ) : isError ? (
         <Alert severity="error">Failed to load queue</Alert>
       ) : (
-        <List>
-          {queue.map((item) => (
-            <ListItem key={`${item.q}_${item.year}`} divider>
-              <ListItemText
-                primary={`${item.q} — ${item.year}`}
-                secondary={`status: ${item.status || 'unknown'} | results: ${item.results ?? 'N/A'} | created: ${item.createdAt ? new Date(item.createdAt).toLocaleString() : 'N/A'}`}
-              />
-            </ListItem>
-          ))}
-        </List>
+        <QueueList queue={queue} />
       )}
     </Container>
   )
