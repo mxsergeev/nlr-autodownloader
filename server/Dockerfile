@@ -2,7 +2,7 @@ FROM node:25-trixie-slim
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY server/package*.json ./
 RUN npx playwright install-deps
 
 # Ensure UTF-8 locale so Cyrillic filenames render correctly
@@ -14,10 +14,13 @@ RUN apt-get update && apt-get install -y locales && \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
+# Copy application source so prisma/schema.prisma is available before generation
+COPY server/ .
+COPY shared/ ./shared/
 
 RUN mkdir -p /data/queries /data/downloads && \
     chown -R node:node /app /data
-    
+
 RUN usermod -g 0 node
 
 USER node
@@ -25,9 +28,6 @@ USER node
 RUN npm install
 
 RUN npx playwright install firefox
-
-# Copy application source so prisma/schema.prisma is available before generation
-COPY . .
 
 RUN npx prisma generate
 

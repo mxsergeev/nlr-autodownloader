@@ -1,7 +1,8 @@
 services:
   server:
     build:
-      context: ./server
+      context: .
+      dockerfile: server/Dockerfile
     group_add:
       - "${NEXTCLOUD_GID:-33}"
     env_file:
@@ -12,6 +13,7 @@ services:
       - 5555:5555
     volumes:
       - ./server/:/app
+      - ./shared/:/app/shared
       - /app/node_modules
       - .env:/.env:ro
       - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
@@ -24,7 +26,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
     env_file:
       - .env
     environment:
@@ -37,6 +40,7 @@ services:
       - "5173:5173"
     volumes:
       - ./frontend:/app
+      - ./shared/:/app/shared
       - /app/node_modules
     restart: unless-stopped
     command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev -- --host 0.0.0.0; else npm run build && npm run start -- --port 5173 --host 0.0.0.0; fi'

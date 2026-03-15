@@ -1,8 +1,9 @@
 import express from 'express'
-import { queryToString, removeQuery } from '../services/download.service.js'
-import { metadataQueue, searchQueue } from '../queue.js'
-import { getAllMetadata, getMetadata, upsertMetadata } from '../services/db.service.js'
+import { removeQuery } from '../services/download.service.js'
+import { getAllMetadata, getMetadata } from '../services/db.service.js'
 import { addMetadataJob } from '../queues/metadata.queue.js'
+import { addDownloadJobBulk } from '../queues/download.queue.js'
+import { RETRYABLE_STATUSES } from '../shared/constants.js'
 
 const router = express.Router()
 
@@ -52,22 +53,6 @@ router.post('/queue', async (req, res) => {
   }
 })
 
-router.get('/queue/:id', async (req, res) => {
-  try {
-    const { id } = req.params
-    const metadata = await getMetadata({ id: Number(id) })
-
-    if (!metadata) {
-      return res.status(404).json({ error: 'Query not found' })
-    }
-
-    res.json({ metadata })
-  } catch (error) {
-    console.error('Query retrieval error:', error)
-    res.status(500).json({ error: 'Failed to retrieve query', message: error.message })
-  }
-})
-
 router.delete('/queue/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -90,42 +75,20 @@ router.post('/queue/:id/retry', async (req, res) => {
       return res.status(404).json({ error: 'Query not found' })
     }
 
-    const retryableStatuses = ['download_blocked', 'search_failed', 'pending']
-    if (!retryableStatuses.includes(metadata.status)) {
+    if (!RETRYABLE_STATUSES.includes(metadata.status)) {
       return res.status(400).json({
         error: `Cannot retry query with status '${metadata.status}'`,
-        retryableStatuses,
+        retryableStatuses: RETRYABLE_STATUSES,
       })
     }
 
-    const originalStatus = metadata.status
-    metadata.status = 'pending'
-    await upsertMetadata({ id: Number(id) }, metadata)
-
-    if (originalStatus === 'download_blocked') {
-      // Search data exists — re-queue search to identify and re-download missing files
-      await searchQueue.add(
-        queryToString({ id: Number(id) }),
-        { query: { id: Number(id) } },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
-      )
+    if (metadata.status === 'download_blocked') {
+      await addDownloadJobBulk({ metadata, searchResults: metadata.searchResults })
     } else {
-      // Full restart from metadata scraping
-      await metadataQueue.add(
-        queryToString({ id: Number(id) }),
-        { query: { id: Number(id) } },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
-      )
+      await addMetadataJob({ url: metadata.url })
     }
 
-    const updated = await getMetadata({ id: Number(id) })
-    res.json({ retried: Number(id), metadata: updated })
+    res.json({ retried: Number(id) })
   } catch (error) {
     console.error('Query retry error:', error)
     res.status(500).json({ error: 'Failed to retry query', message: error.message })

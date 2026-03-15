@@ -1,6 +1,7 @@
 import React from 'react'
 import axios from 'axios'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { RETRYABLE_STATUSES } from '@shared/constants.js'
 import {
   Box,
   Card,
@@ -26,6 +27,7 @@ import InboxRoundedIcon from '@mui/icons-material/InboxRounded'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import { styled } from '@mui/material/styles'
 
 function formatTimestamp(value) {
@@ -110,7 +112,7 @@ const ExpandButton = styled(IconButton, {
   color: theme.palette.text.secondary,
 }))
 
-function QueueItem({ item, index, isLoading, onRequestDelete }) {
+function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetry }) {
   const [expanded, setExpanded] = React.useState(false)
 
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
@@ -128,6 +130,14 @@ function QueueItem({ item, index, isLoading, onRequestDelete }) {
     if (!item?.id) return
     onRequestDelete && onRequestDelete(item)
   }
+
+  const handleRetry = (e) => {
+    e.stopPropagation()
+    if (!item?.id) return
+    onRetry && onRetry(item)
+  }
+
+  const canRetry = RETRYABLE_STATUSES.includes((item.status ?? '').toLowerCase())
 
   const searchResults = Array.isArray(item.searchResults) ? item.searchResults : []
 
@@ -173,6 +183,19 @@ function QueueItem({ item, index, isLoading, onRequestDelete }) {
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <StatusChip status={item.status} />
+            {canRetry && (
+              <Tooltip title="Retry">
+                <IconButton
+                  size="small"
+                  aria-label="Retry item"
+                  color="primary"
+                  onClick={handleRetry}
+                  disabled={isRetrying || isPending}
+                >
+                  <ReplayRoundedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
             <Tooltip title="Delete">
               <IconButton
                 size="small"
@@ -181,7 +204,7 @@ function QueueItem({ item, index, isLoading, onRequestDelete }) {
                 onClick={(e) => {
                   handleDelete(e)
                 }}
-                disabled={isLoading}
+                disabled={isPending || isRetrying}
               >
                 <DeleteRoundedIcon sx={{ fontSize: 18 }} />
               </IconButton>
@@ -303,6 +326,27 @@ export default function QueueList({ queue }) {
   const [selectedItem, setSelectedItem] = React.useState(null)
   const [snackbar, setSnackbar] = React.useState({ open: false, message: '', severity: 'success' })
 
+  const retryMutation = useMutation({
+    mutationFn: async (id) => {
+      await axios.post(`/playwright/queue/${id}/retry`)
+      return id
+    },
+    onSuccess: (id) => {
+      qc.invalidateQueries({ queryKey: ['queue'] })
+      setSnackbar({ open: true, message: `Retrying query ${id}`, severity: 'success' })
+      setSelectedItem(null)
+    },
+    onError: (err) => {
+      const serverMsg = err?.response?.data?.error
+      setSnackbar({
+        open: true,
+        message: serverMsg || err?.message || 'Failed to retry query',
+        severity: 'error',
+      })
+      setSelectedItem(null)
+    },
+  })
+
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
       await axios.delete(`/playwright/queue/${id}`)
@@ -324,6 +368,11 @@ export default function QueueList({ queue }) {
   const requestDelete = (item) => {
     setSelectedItem(item)
     setDialogOpen(true)
+  }
+
+  const requestRetry = (item) => {
+    setSelectedItem(item)
+    retryMutation.mutate(item.id)
   }
 
   const confirmDelete = () => {
@@ -381,8 +430,10 @@ export default function QueueList({ queue }) {
             key={item.id ?? item.pageUrl ?? `queue-item-${index}`}
             item={item}
             index={index}
-            isLoading={deleteMutation.isLoading && selectedItem?.id === item.id}
+            isPending={deleteMutation.isPending && selectedItem?.id === item.id}
+            isRetrying={retryMutation.isPending && selectedItem?.id === item.id}
             onRequestDelete={requestDelete}
+            onRetry={requestRetry}
           />
         ))}
       </Box>
@@ -392,7 +443,7 @@ export default function QueueList({ queue }) {
         title="Remove query"
         content="Are you sure you want to remove this query from the queue? This action cannot be undone."
         itemLabel={selectedItem?.pageUrl ?? `Query #${selectedItem?.id ?? ''}`}
-        loading={deleteMutation.isLoading}
+        loading={deleteMutation.isPending}
         onClose={() => {
           setDialogOpen(false)
           setSelectedItem(null)
