@@ -14,6 +14,9 @@ services:
       - .env:/.env:ro
       - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
       - queries_data:/data/queries
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     command: /bin/sh -c 'if [ "$NODE_ENV" = "development" ]; then npm run dev; else npm start; fi'
 
@@ -26,6 +29,26 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nlr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nlr_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-nlr_autodownloader}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-nlr} -d ${POSTGRES_DB:-nlr_autodownloader}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   queries_data:
   redis_data:
+  postgres_data:

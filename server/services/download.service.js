@@ -3,6 +3,14 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import UserAgent from 'user-agents'
+import {
+  getQuery,
+  upsertQuery,
+  getAllQueries,
+  deleteQuery as dbDeleteQuery,
+  getSearchResults,
+  saveSearchResults,
+} from './db.service.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -74,32 +82,7 @@ async function runJob(fn) {
 }
 
 export async function loadQueriesMetadata() {
-  // find query subdirectories and look for metadata files inside each
-  const entries = await fs.readdir(QUERY_DIR, { withFileTypes: true })
-  const dirs = entries.filter((e) => e.isDirectory())
-
-  const results = []
-
-  for (const dir of dirs) {
-    const dirPath = path.join(QUERY_DIR, dir.name)
-    const files = await fs.readdir(dirPath, { withFileTypes: true })
-    const metaFile = files.find((f) => f.isFile() && f.name.endsWith('.metadata.json'))
-
-    if (!metaFile) continue
-
-    const metaFilePath = path.join(dirPath, metaFile.name)
-    try {
-      const metadata = JSON.parse(await fs.readFile(metaFilePath, 'utf-8'))
-      results.push(metadata)
-    } catch (err) {
-      console.warn(`Failed to read metadata for ${dir.name}:`, err.message)
-    }
-  }
-
-  // Sort by creation date, oldest first
-  results.sort((a, b) => a.order - b.order)
-
-  return results
+  return getAllQueries()
 }
 
 
@@ -145,7 +128,10 @@ export function stopDownloadsWatcher() {
 
 async function generateDownloadsReport() {
   const metadataList = await loadQueriesMetadata()
-  const metadataMap = new Map(metadataList.map((m) => [queryToString(m.query), m]))
+  // Convert prisma records into a map keyed by the query string (q_year). Ensure order is a Number for in-memory sorting.
+  const metadataMap = new Map(
+    metadataList.map((m) => [queryToString({ q: m.q, year: m.year }), { ...m, order: m.order !== undefined ? Number(m.order) : 0 }]),
+  )
 
   const entries = await fs.readdir(DOWNLOADS_DIR, { withFileTypes: true }).catch(() => [])
   const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
@@ -184,7 +170,7 @@ async function generateDownloadsReport() {
       downloaded,
       total,
       progress,
-      order: meta.order || 0,
+      order: Number(meta.order) || 0,
     })
   }
 
@@ -197,7 +183,7 @@ async function generateDownloadsReport() {
         downloaded: 0,
         total: meta.results || 0,
         progress: meta.results ? '0.00%' : 'N/A',
-        order: meta.order || 0,
+        order: Number(meta.order) || 0,
       })
     }
   }
@@ -290,7 +276,8 @@ async function scrapMetadata(params) {
     const pageUrl = page.url()
 
     const metadata = {
-      query: params,
+      q: params.q,
+      year: Number(params.year),
       results: resultNumber,
       resultsPerPart,
       parts,
@@ -302,22 +289,14 @@ async function scrapMetadata(params) {
 }
 
 export async function writeMetadata(params, metadata) {
-  await fs.mkdir(path.join(QUERY_DIR, queryToString(params)), { recursive: true, mode: 0o775 })
-  const outputPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
-  await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2))
+  await upsertQuery(params, metadata)
 }
 
 export async function readMetadata(params) {
-  try {
-    const metadataPath = path.join(QUERY_DIR, queryToString(params), `${queryToString(params)}.metadata.json`)
-    const metadataContent = await fs.readFile(metadataPath, 'utf-8')
-    return JSON.parse(metadataContent)
-  } catch {
-    return null
-  }
+  return getQuery(params)
 }
 
-async function loadMetadata(params) {
+export async function loadMetadata(params) {
   const existingMetadata = await readMetadata(params)
 
   if (existingMetadata && existingMetadata.results !== null) {
@@ -327,8 +306,9 @@ async function loadMetadata(params) {
   try {
     const metadata = await scrapMetadata(params)
 
-    metadata.createdAt = existingMetadata?.createdAt ?? new Date().toISOString()
-    metadata.order = existingMetadata?.order ?? Date.now()
+    // Use Date objects in the new Prisma format for createdAt, and normalize order to Number for in-memory logic
+    metadata.createdAt = existingMetadata?.createdAt ?? new Date()
+    metadata.order = existingMetadata ? Number(existingMetadata.order) : Date.now()
     metadata.status = 'pending'
 
     await writeMetadata(params, metadata)
@@ -347,19 +327,20 @@ async function loadMetadata(params) {
 
 /**
  * Queue a query without performing heavy scraping now.
- * Creates a minimal metadata file with status 'pending' so the query is resumed on server start or by the watcher.
+ * Creates a minimal metadata record with status 'pending' so the query is resumed on server start or by the watcher.
  */
 export async function queueQuery(params, { order = 0 } = {}) {
   const existing = await readMetadata(params)
   if (existing && existing.status !== 'search_failed') return existing
 
   const metadata = {
-    query: params,
+    q: params.q,
+    year: Number(params.year),
     results: null,
     resultsPerPart: null,
     parts: null,
     pageUrl: null,
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
     order: Date.now() + order,
     status: 'pending',
   }
@@ -452,18 +433,19 @@ async function getPartFileNames(params) {
 }
 
 function verifySearchResults(results, metadata) {
-  const isFresh = metadata.createdAt && new Date(metadata.createdAt) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+  const createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null
+  const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   if (!isFresh) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Search results are older than 24 hours. Consider refreshing the search results.`,
     )
     return false
   }
 
   if (results.length !== metadata.results) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Expected ${metadata.results} results, but got ${results.length}.`,
     )
     return false
   }
@@ -481,7 +463,7 @@ function verifySearchResults(results, metadata) {
 
   if (duplicates.length > 0) {
     console.warn(
-      `[${queryToString(metadata.query)}] Warning: Found ${duplicates.length} duplicate items in the results.`,
+      `[${queryToString({ q: metadata.q, year: metadata.year })}] Warning: Found ${duplicates.length} duplicate items in the results.`,
     )
     return false
   }
@@ -490,6 +472,7 @@ function verifySearchResults(results, metadata) {
 }
 
 export async function removeQuery(params) {
+  await dbDeleteQuery(params)
   const dir = path.join(QUERY_DIR, queryToString(params))
   await fs.rm(dir, { recursive: true, force: true })
 }
@@ -511,19 +494,17 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
     throw new Error('No search parameters provided.')
   }
 
-  const dir = path.join(QUERY_DIR, queryToString(params))
-
-  const searchResults = override
-    ? null
-    : JSON.parse(await fs.readFile(path.join(dir, `${queryToString(params)}.json`), 'utf-8').catch(() => 'null'))
-
-  if (searchResults && searchResults.length > 0) {
-    const metadata = await loadMetadata(params)
-
-    if (verifySearchResults(searchResults, metadata)) {
-      return searchResults
+  if (!override) {
+    const cached = await getSearchResults(params)
+    if (cached && cached.length > 0) {
+      const metadata = await loadMetadata(params)
+      if (verifySearchResults(cached, metadata)) {
+        return cached
+      }
     }
   }
+
+  const dir = path.join(QUERY_DIR, queryToString(params))
 
   let partNames = await getPartFileNames(params)
 
@@ -557,8 +538,7 @@ export async function loadSearchResults(params = {}, { override = false } = {}) 
     await fs.unlink(path.join(dir, part.base))
   }
 
-  const outputPath = path.join(dir, `${queryToString(params)}.json`)
-  await fs.writeFile(outputPath, JSON.stringify(results, null, 2))
+  await saveSearchResults(params, results)
 
   return results
 }

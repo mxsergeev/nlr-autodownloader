@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum QueryStatus {
+  pending
+  downloading
+  completed
+  download_blocked
+  search_failed
+}
+
+model Query {
+  id               Int           @id @default(autoincrement())
+  q                String
+  year             Int
+  status           QueryStatus   @default(pending)
+  results          Int?
+  resultsPerPart   Int?
+  parts            Int?
+  pageUrl          String?
+  /// Numeric sort key — stored as Date.now() + offset, so needs BigInt
+  order            BigInt        @default(0)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  lastAttempt      DateTime?
+  downloaded       Int           @default(0)
+  downloadProgress String?
+
+  searchResults SearchResult[]
+
+  @@unique([q, year])
+}
+
+model SearchResult {
+  id       Int    @id @default(autoincrement())
+  title    String
+  href     String
+  fileName String
+
+  queryId Int
+  query   Query @relation(fields: [queryId], references: [id], onDelete: Cascade)
+
+  @@unique([queryId, href])
+}
