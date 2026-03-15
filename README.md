@@ -1,154 +1,195 @@
-# NLR-AUTODOWNLOADER
+# NLR Autodownloader
 
-Crawl and download documents from the National Library of Russia using Playwright.
+Crawl and download documents from National Library of Russia (Primo) result pages using Playwright, BullMQ, Redis, and PostgreSQL.
 
-## Run and test
+## What this project does
 
-This project is developed and run with Docker Compose (recommended).
+- Accepts one or more Primo result-page URLs.
+- Scrapes query metadata (result count, pages).
+- Scrapes all document links for each query.
+- Downloads document PDFs in parallel.
+- Stores queue state and document records in PostgreSQL.
+- Provides a React UI to add, retry, inspect, and remove queued queries.
 
-### Development with Docker Compose
+## Stack and services
 
-1. Copy environment example and adjust as needed:
+- `server/`: Express API + BullMQ workers + Playwright scraper/downloader + Prisma.
+- `frontend/`: React 19 + MUI + TanStack Query queue manager UI.
+- `redis`: BullMQ backend.
+- `postgres`: persistent data for queries and search results.
 
+Main queues:
+
+- `metadataQueue`: scrape result count and pagination metadata.
+- `searchQueue`: scrape all result links.
+- `downloadQueue`: download missing PDFs.
+
+## Quick start (Docker Compose)
+
+1. Copy environment file:
+
+   ```bash
    cp .env.example .env
+   ```
 
-   Edit `.env` to set `NODE_ENV=development` for hot-reload during development.
+2. For local development, set `NODE_ENV=development` in `.env` (enables hot reload and Prisma Studio in the server container).
 
-2. Build and start services (server + redis):
+3. Build and start all services:
 
-   docker-compose up --build
+   ```bash
+   docker compose up --build
+   ```
 
-   This builds the server image (the Dockerfile installs Playwright dependencies and Firefox) and starts Redis.
+4. Open:
 
-3. Access the server at http://localhost:${SERVER_PORT:-3333}
+- Frontend UI: `http://localhost:5173`
+- Server API: `http://localhost:${SERVER_PORT:-3333}`
+- Health check: `http://localhost:${SERVER_PORT:-3333}/health`
+- Prisma Studio (development mode): `http://localhost:5555`
 
-4. Iterative development (hot reload):
-   - Ensure `NODE_ENV=development` in `.env` so the container runs `npm run dev` (nodemon).
-   - Code changes on the host are mounted into the container (see docker-compose.yml), so changes reload automatically.
-   - To rebuild the server image after changing dependencies or package.json:
+Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_data`) and downloaded files are mounted to `${DOWNLOADS_DIR}` (default `./data/downloads`).
 
-     docker-compose up --build --force-recreate --no-deps server
+## Development workflow
 
-5. Running helper commands inside the running container:
-   - Install browsers (only needed when changing Playwright install target):
+- Server and frontend sources are bind-mounted, so code changes reload automatically in development mode.
+- Rebuild only server when dependencies or server Dockerfile context changes:
 
-     docker-compose exec server npm run install-browsers
+  ```bash
+  docker compose up --build --force-recreate --no-deps server
+  ```
 
-   - Run the smoke test:
+- Useful server commands:
 
-     docker-compose exec server npm run smoke
+  ```bash
+  docker compose exec server npm run smoke
+  docker compose exec server npm run lint
+  docker compose exec server npm run db:migrate:dev
+  ```
 
-   - Run lint:
+## Environment variables
 
-     docker-compose exec server npm run lint
+### Core
 
-6. Quick health check from host:
+| Variable               | Default                                                       | Description |
+| ---------------------- | ------------------------------------------------------------- | ----------- |
+| `NODE_ENV`             | `production`                                                  | Use `development` for hot reload and Prisma Studio in compose. |
+| `SERVER_PORT`          | `3333`                                                        | Express server port. |
+| `DOWNLOADS_DIR`        | `./data/downloads`                                            | Host directory mounted for downloaded files. |
+| `CONCURRENT_DOWNLOADS` | `2`                                                           | Download worker concurrency. |
+| `PLAYWRIGHT_HEADLESS`  | `true` (implicit if unset)                                   | Set to `false` to run browser non-headless. |
+| `DATABASE_URL`         | `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}` | Prisma/PostgreSQL connection string. |
 
-   curl http://localhost:3333/health # returns {"status":"ok"}
+### Redis
 
-### Smoke test
+| Variable         | Default | Description |
+| ---------------- | ------- | ----------- |
+| `REDIS_HOST`     | `redis` | Redis host for BullMQ/ioredis. |
+| `REDIS_PORT`     | `6379`  | Redis port. |
+| `REDIS_PASSWORD` | `1234`  | Redis password. |
+| `REDIS_DB`       | `0`     | Redis database index. |
 
-A lightweight smoke test verifies the HTTP health endpoint and Redis connectivity. Run it inside the server container:
+### PostgreSQL
 
-docker-compose exec server npm run smoke
-
-Exit code 0 indicates success.
-
-### Notes
-
-- `.env.example` exists at the repo root and contains the environment variables used by the server.
-- Data and downloads are mounted to `./data/downloads` by default (see docker-compose.yml).
-- The Dockerfile already installs Playwright and Firefox at image build time; running `npm run install-browsers` inside the container can be used to re-install if needed.
-
-## Setup
-
-1. Copy `.env.example` to `.env` and adjust as needed
-2. Run with Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-The server listens on the port defined by `SERVER_PORT` (default: `3333`).
-
-## Environment Variables
-
-| Variable                     | Default            | Description                                 |
-| ---------------------------- | ------------------ | ------------------------------------------- |
-| `NODE_ENV`                   | `production`       | `development` enables nodemon hot-reload    |
-| `SERVER_PORT`                | `3333`             | HTTP server port                            |
-| `DOWNLOADS_DIR`              | `./data/downloads` | Where PDFs are saved                        |
-| `CONCURRENT_DOWNLOADS`       | `2`                | Parallel Playwright download workers        |
-| `RUN_QUEUE_WATCHER`          | `true`             | Generate `progress.md` report periodically  |
-| `DOWNLOADS_WATCHER_INTERVAL` | `60000`            | Report generation interval (ms)             |
-| `DOWNLOADS_REPORT_NAME`      | `progress.md`      | Progress report filename in `DOWNLOADS_DIR` |
-| `REDIS_HOST`                 | `redis`            | Redis hostname                              |
-| `REDIS_PORT`                 | `6379`             | Redis port                                  |
-| `REDIS_PASSWORD`             | —                  | Redis password                              |
-| `REDIS_DB`                   | `0`                | Redis database index                        |
+| Variable            | Default                | Description |
+| ------------------- | ---------------------- | ----------- |
+| `POSTGRES_USER`     | `nlr`                  | PostgreSQL username. |
+| `POSTGRES_PASSWORD` | `nlr_secret`           | PostgreSQL password. |
+| `POSTGRES_DB`       | `nlr_autodownloader`   | PostgreSQL database name. |
+| `NEXTCLOUD_GID`     | `33`                   | Optional group id added to the server container. |
 
 ## API
 
-### Health check
+Base path: `/playwright`
 
-```
-GET /health
-```
+### `GET /health`
 
-### List all queries
+Returns:
 
-```
-GET /playwright/queue
+```json
+{ "status": "ok" }
 ```
 
-### Add queries
+### `GET /playwright/queue`
 
-```
-POST /playwright/queue
-Content-Type: application/json
+Returns all queued queries (ordered) with nested `searchResults`.
 
-{ "queries": [{ "q": "search", "year": 2020 }] }
-```
+### `POST /playwright/queue`
 
-### Get single query status
+Add one or more query URLs:
 
-```
-GET /playwright/queue/:queryName
-```
-
-`queryName` is the internal identifier returned by the list endpoint (e.g. `поиск_2020`).
-
-### Remove a query
-
-```
-DELETE /playwright/queue/:queryName
-DELETE /playwright/queue/:queryName?removeDownloads=true   # also deletes downloaded PDFs
+```json
+{
+  "queries": [
+    { "url": "https://primo.nlr.ru/primo-explore/search?query=any,contains,..." }
+  ]
+}
 ```
 
-### Retry a failed query
+Each item must include `url`. Response includes updated queue and per-item failures:
 
+```json
+{ "failed": [], "queue": [...] }
 ```
-POST /playwright/queue/:queryName/retry
-```
 
-Retryable statuses: `download_blocked`, `search_failed`, `pending`.
+### `DELETE /playwright/queue/:id`
 
-- `download_blocked` → re-queues the search stage (keeps already-downloaded files).
-- `search_failed` / `pending` → restarts from metadata scraping.
+Removes a query by numeric id, removes related queued jobs, and deletes downloaded files for that query directory.
+
+### `POST /playwright/queue/:id/retry`
+
+Retries a query when status is retryable (`download_blocked`, `search_failed`, `pending`, `failed`).
+
+- If status is `download_blocked`, only missing downloads are queued.
+- Otherwise, metadata scraping is queued again.
+
+## Query status lifecycle
+
+`pending` -> `downloading` -> `completed`
+
+Failure-oriented states:
+
+- `download_blocked`
+- `search_failed`
+
+Each search result row also stores an item-level status.
 
 ## Pipeline
 
-```
+```text
 POST /playwright/queue
-        │
-        ▼
-  metadataQueue  ── scrapes result count & pagination
-        │
-        ▼
-  searchQueue    ── scrapes all result page URLs
-        │
-        ▼
-  downloadQueue  ── downloads each PDF via Playwright
+        |
+        v
+metadataQueue  -- scrape result count/parts and canonical page URL
+        |
+        v
+searchQueue    -- scrape and persist all search result items
+        |
+        v
+downloadQueue  -- download missing PDFs into DOWNLOADS_DIR/<queryId>/
 ```
 
-Jobs are backed by Redis (BullMQ) and survive server restarts.
+Jobs are persisted in Redis and metadata/search results are persisted in PostgreSQL.
+
+## Frontend behavior
+
+The frontend (`frontend/`) polls `/playwright/queue` every 3 seconds and supports:
+
+- Adding URLs to queue.
+- Expanding query rows to inspect result items and statuses.
+- Retrying retryable queries.
+- Deleting queries with confirmation.
+
+In compose, frontend API proxy target is set by `VITE_SERVER_HOST`/`VITE_SERVER_PORT`.
+
+## Smoke test
+
+Run from the server container:
+
+```bash
+docker compose exec server npm run smoke
+```
+
+The smoke script checks:
+
+- `GET /health`
+- Redis `PING`
