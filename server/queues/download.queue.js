@@ -16,7 +16,8 @@ export async function addDownloadJobBulk({ metadata, searchResults } = {}) {
     opts: {
       jobId: `download-${item.id}`,
       attempts: 10,
-      backoff: { type: 'exponential', delay: 5000 },
+      backoff: { type: 'fixed', delay: 2000 },
+      lifo: true,
     },
   }))
 

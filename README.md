@@ -169,6 +169,7 @@ downloadQueue  -- download missing PDFs into DOWNLOADS_DIR/<queryId>/
 ```
 
 Jobs are persisted in Redis and metadata/search results are persisted in PostgreSQL.
+Failed download jobs are retried immediately (LIFO) before new downloads are processed, with a 2-second fixed backoff between retry attempts to respect remote server limits.
 
 ## Frontend behavior
 
