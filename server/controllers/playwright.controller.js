@@ -1,6 +1,6 @@
 import express from 'express'
 import { removeQuery } from '../services/download.service.js'
-import { getAllMetadata, getMetadata } from '../services/db.service.js'
+import { getAllMetadata, getMetadata, upsertMetadata } from '../services/db.service.js'
 import { addMetadataJob } from '../queues/metadata.queue.js'
 import { addDownloadJobBulk } from '../queues/download.queue.js'
 import { RETRYABLE_STATUSES } from '../shared/constants.js'
@@ -92,6 +92,27 @@ router.post('/queue/:id/retry', async (req, res) => {
   } catch (error) {
     console.error('Query retry error:', error)
     res.status(500).json({ error: 'Failed to retry query', message: error.message })
+  }
+})
+
+router.post('/queue/:id/pause', async (req, res) => {
+  try {
+    const { id } = req.params
+    const metadata = await getMetadata({ id: Number(id) })
+
+    if (!metadata) {
+      return res.status(404).json({ error: 'Query not found' })
+    }
+
+    const newStatus = metadata.status === 'paused' ? 'pending' : 'paused'
+    metadata.status = newStatus
+
+    const updated = await upsertMetadata({ id: Number(id) }, metadata)
+
+    res.json({ paused: newStatus === 'paused', id: Number(id), status: newStatus })
+  } catch (error) {
+    console.error('Query pause error:', error)
+    res.status(500).json({ error: 'Failed to pause query', message: error.message })
   }
 })
 

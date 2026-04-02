@@ -17,6 +17,7 @@ const fetchQueue = async () => {
 export default function App() {
   const qc = useQueryClient()
   const { mode, toggleColorMode } = useColorMode()
+  const [pendingJobs, setPendingJobs] = React.useState({}) // { url: { status: 'loading' | 'error', message? } }
 
   const {
     data: queue = [],
@@ -35,12 +36,62 @@ export default function App() {
       })
       return data
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+    onError: (err, url) => {
+      setPendingJobs((prev) => ({
+        ...prev,
+        [url]: {
+          status: 'error',
+          message: err?.response?.data?.error || err?.message || 'Failed to add URL',
+        },
+      }))
+    },
   })
 
   const handleAddUrl = (url) => {
+    setPendingJobs((prev) => ({ ...prev, [url]: { status: 'loading' } }))
     mutation.mutate(url)
   }
+
+  const queueUrls = React.useMemo(() => new Set(queue.map((item) => item.pageUrl).filter(Boolean)), [queue])
+
+  React.useEffect(() => {
+    setPendingJobs((prev) => {
+      let changed = false
+      const next = {}
+
+      for (const [url, state] of Object.entries(prev)) {
+        if (queueUrls.has(url)) {
+          changed = true
+          continue
+        }
+
+        next[url] = state
+      }
+
+      return changed ? next : prev
+    })
+  }, [queueUrls])
+
+  const displayQueue = React.useMemo(() => {
+    const pending = Object.entries(pendingJobs).map(([url, state]) => ({
+      id: `pending-${url}`,
+      pageUrl: url,
+      status: state.status === 'error' ? 'search_failed' : 'pending',
+      results: null,
+      resultsPerPart: null,
+      parts: null,
+      searchResults: [],
+      createdAt: new Date(),
+      isPending: true,
+      pendingError: state.message,
+    }))
+    const visiblePending = pending.filter((item) => !queueUrls.has(item.pageUrl))
+
+    return [...visiblePending, ...queue]
+  }, [pendingJobs, queue, queueUrls])
 
   return (
     <Box
@@ -131,7 +182,7 @@ export default function App() {
           ) : isError ? (
             <Alert severity="error">Failed to load queue. Retrying…</Alert>
           ) : (
-            <QueueList queue={queue} />
+            <QueueList queue={displayQueue} />
           )}
         </Box>
       </Container>

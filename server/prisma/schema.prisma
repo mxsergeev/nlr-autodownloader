@@ -13,6 +13,7 @@ enum QueryStatus {
   completed
   download_blocked
   search_failed
+  paused
 }
 
 model Query {

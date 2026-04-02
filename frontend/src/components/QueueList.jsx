@@ -2,6 +2,7 @@ import React from 'react'
 import axios from 'axios'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { RETRYABLE_STATUSES } from '@shared/constants.js'
+import { List } from 'react-window'
 import {
   Box,
   Card,
@@ -10,14 +11,13 @@ import {
   Typography,
   Tooltip,
   Divider,
-  List,
   ListItem,
   ListItemText,
   IconButton,
   Collapse,
-  Button,
   Snackbar,
   Alert,
+  CircularProgress,
 } from '@mui/material'
 import ConfirmDialog from './ConfirmDialog'
 import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded'
@@ -28,6 +28,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
+import PauseRoundedIcon from '@mui/icons-material/PauseRounded'
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded'
 import { styled } from '@mui/material/styles'
 
 function formatTimestamp(value) {
@@ -42,6 +44,7 @@ const STATUS_CONFIG = {
   completed: { label: 'Completed', color: 'success' },
   download_blocked: { label: 'Download Blocked', color: 'error' },
   search_failed: { label: 'Search Failed', color: 'error' },
+  paused: { label: 'Paused', color: 'warning' },
 }
 
 function StatusChip({ status }) {
@@ -114,14 +117,24 @@ const ExpandButton = styled(IconButton, {
 
 function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetry }) {
   const [expanded, setExpanded] = React.useState(false)
+  const qc = useQueryClient()
 
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
   const created = formatTimestamp(item.createdAt)
   const resultsCount = Array.isArray(item.searchResults) ? item.searchResults.length : (item.results ?? 'N/A')
+  const status = (item.status ?? '').toLowerCase()
+
+  const pauseMutation = useMutation({
+    mutationFn: async (id) => {
+      await axios.post(`/playwright/queue/${id}/pause`)
+      return id
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue'] })
+    },
+  })
 
   const toggle = (ev) => {
-    // Prevent toggling when clicking on interactive children in the future
-    // but allow single-click expanding the item
     setExpanded((s) => !s)
   }
 
@@ -137,7 +150,15 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
     onRetry && onRetry(item)
   }
 
-  const canRetry = RETRYABLE_STATUSES.includes((item.status ?? '').toLowerCase())
+  const handlePause = (e) => {
+    e.stopPropagation()
+    if (!item?.id) return
+    pauseMutation.mutate(item.id)
+  }
+
+  const isPaused = status === 'paused'
+  const canPause = ['pending', 'downloading'].includes(status) || isPaused
+  const canRetry = RETRYABLE_STATUSES.includes(status)
 
   const searchResults = Array.isArray(item.searchResults) ? item.searchResults : []
 
@@ -153,17 +174,22 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
         },
       }}
     >
-      <CardContent
-        onClick={toggle}
-        sx={{
-          p: '12px 16px !important',
-          cursor: 'pointer',
-        }}
-      >
+        <CardContent
+          onClick={toggle}
+          sx={{
+            p: '12px 16px !important',
+            cursor: 'pointer',
+            opacity: status === 'pending' ? 0.7 : 1,
+            backgroundColor: status === 'search_failed' ? 'rgba(211, 47, 47, 0.08)' : 'transparent',
+          }}
+        >
         {/* Top row: URL label + status chip + expand button */}
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flex: 1, minWidth: 0 }}>
-            <LinkRoundedIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0, mt: '1px' }} />
+            {status === 'pending' && (
+              <CircularProgress size={14} thickness={4} sx={{ flexShrink: 0 }} />
+            )}
+            {status !== 'pending' && <LinkRoundedIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0, mt: '1px' }} />}
             <Tooltip title={label} placement="top-start">
               <Typography
                 variant="body2"
@@ -183,6 +209,23 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <StatusChip status={item.status} />
+            {canPause && (
+              <Tooltip title={isPaused ? 'Resume' : 'Pause'}>
+                <IconButton
+                  size="small"
+                  aria-label={isPaused ? 'Resume item' : 'Pause item'}
+                  color={isPaused ? 'warning' : 'default'}
+                  onClick={handlePause}
+                  disabled={pauseMutation.isPending || isPending || isRetrying}
+                >
+                  {isPaused ? (
+                    <PlayArrowRoundedIcon sx={{ fontSize: 18 }} />
+                  ) : (
+                    <PauseRoundedIcon sx={{ fontSize: 18 }} />
+                  )}
+                </IconButton>
+              </Tooltip>
+            )}
             {canRetry && (
               <Tooltip title="Retry">
                 <IconButton
@@ -215,7 +258,6 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
               expand={expanded ? 1 : 0}
               size="small"
               onClick={(e) => {
-                // stop propagation so the CardContent's onClick doesn't toggle twice
                 e.stopPropagation()
                 setExpanded((s) => !s)
               }}
@@ -226,6 +268,12 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
         </Box>
 
         <Divider sx={{ mb: 1, borderColor: 'divider' }} />
+
+        {status === 'search_failed' && (
+          <Alert severity="error" sx={{ mb: 1, fontSize: '0.85rem' }}>
+            {item.pendingError || 'This job failed. You can retry it.'}
+          </Alert>
+        )}
 
         {/* Bottom row: meta info */}
         <Box
@@ -258,65 +306,89 @@ function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetr
                 No documents found for this query.
               </Typography>
             ) : (
-              <List dense disablePadding>
-                {searchResults.map((doc, i) => (
-                  <React.Fragment key={doc.id ?? doc.href ?? `${i}`}>
-                    <ListItem
-                      sx={{
-                        px: 1,
-                        py: 0.5,
-                        alignItems: 'center',
-                      }}
-                      secondaryAction={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <StatusChip status={doc.status} />
-                        </Box>
-                      }
-                    >
-                      <ListItemText
-                        primary={
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: 500,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              maxWidth: 'calc(100% - 120px)',
-                            }}
-                          >
-                            {doc.fileName ?? doc.title ?? doc.href ?? 'Untitled'}
-                          </Typography>
-                        }
-                        secondary={
-                          doc.href ? (
-                            <Tooltip title={doc.href}>
-                              <Typography
-                                variant="caption"
-                                sx={{
-                                  color: 'text.secondary',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  maxWidth: '100%',
-                                }}
-                              >
-                                {doc.href}
-                              </Typography>
-                            </Tooltip>
-                          ) : null
-                        }
-                      />
-                    </ListItem>
-                    {i < searchResults.length - 1 && <Divider component="li" sx={{ my: 0.5 }} />}
-                  </React.Fragment>
-                ))}
-              </List>
+              <VirtualizedDocumentList documents={searchResults} />
             )}
           </Box>
         </Box>
       </Collapse>
     </Card>
+  )
+}
+
+function VirtualizedDocumentList({ documents }) {
+  const itemHeight = 50
+  const height = Math.min(400, documents.length * itemHeight)
+
+  const Row = ({ index, style }) => {
+    const doc = documents[index]
+    return (
+      <Box style={style} sx={{ px: 1, py: 0.5, boxSizing: 'border-box' }}>
+        <ListItem
+          sx={{
+            px: 1,
+            py: 0.5,
+            alignItems: 'center',
+            border: index < documents.length - 1 ? '1px solid' : 'none',
+            borderColor: 'divider',
+          }}
+          secondaryAction={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <StatusChip status={doc.status} />
+            </Box>
+          }
+        >
+          <ListItemText
+            primary={
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 500,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: 'calc(100% - 120px)',
+                  fontSize: '0.85rem',
+                }}
+              >
+                {doc.fileName ?? doc.title ?? doc.href ?? 'Untitled'}
+              </Typography>
+            }
+            secondary={
+              doc.href ? (
+                <Tooltip title={doc.href}>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: '100%',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    {doc.href}
+                  </Typography>
+                </Tooltip>
+              ) : null
+            }
+          />
+        </ListItem>
+      </Box>
+    )
+  }
+
+  return (
+    <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+      <List
+        defaultHeight={height}
+        rowCount={documents.length}
+        rowHeight={itemHeight}
+        rowComponent={Row}
+        rowProps={{}}
+        style={{ width: '100%' }}
+      />
+    </Box>
   )
 }
 

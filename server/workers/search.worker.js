@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq'
 import { connection } from '../queue.js'
 import { scrapSearchResults, verifySearchResults } from '../services/download.service.js'
-import { getSearchResults, saveSearchResults } from '../services/db.service.js'
+import { getMetadata, getSearchResults, saveSearchResults, upsertMetadata } from '../services/db.service.js'
 import { addDownloadJobBulk } from '../queues/download.queue.js'
 
 export const searchWorker = new Worker(
@@ -36,7 +36,24 @@ export const searchWorker = new Worker(
   { connection, concurrency: 1 },
 )
 
-searchWorker.on('failed', (job, err) => {
+searchWorker.on('failed', async (job, err) => {
+  const { metadata } = job?.data || {}
+
+  if (metadata && job && job.attemptsMade >= (job.opts?.attempts ?? 1)) {
+    const record = await getMetadata({ id: metadata.id })
+
+    if (record) {
+      await upsertMetadata(
+        { id: record.id },
+        {
+          ...record,
+          status: 'search_failed',
+          lastAttempt: new Date(),
+        },
+      ).catch(() => null)
+    }
+  }
+
   console.error(`[Search] Job ${job?.id} failed:`, err.message)
 })
 
