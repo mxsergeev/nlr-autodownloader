@@ -75,13 +75,15 @@ export async function scrapMetadata({ url } = {}) {
   return runJob(async (page) => {
     await page.goto(url)
 
-    await page
-      .getByRole('button', { name: 'Сортировать по Релевантность' })
-      .click({ timeout: 5000 })
-      .catch(() => {
-        throw new Error('No results found for the given search criteria.')
-      })
-    await page.getByRole('option', { name: 'Дата выхода периодики (по возр.)' }).click()
+    const sortButton = page.getByRole('button', { name: 'Сортировать по Релевантность' })
+    const sortButtonExists = await sortButton.isVisible({ timeout: 3000 }).catch(() => false)
+
+    if (sortButtonExists) {
+      await sortButton.click({ timeout: 5000 })
+      await page.getByRole('option', { name: 'Дата выхода периодики (по возр.)' }).click()
+    } else {
+      // Sort button not found, proceeding with current sort
+    }
 
     await page.waitForSelector('.item-title', { timeout: 15000 }).catch(() => {
       throw new Error('No results found for the given search criteria.')
@@ -105,6 +107,8 @@ export async function scrapMetadata({ url } = {}) {
       parts,
       pageUrl: finalUrl,
     }
+
+    console.log(`[Metadata] Successfully scraped metadata: ${resultNumber} results, ${resultsPerPart} per page, ${parts} parts`)
 
     return metadata
   })
