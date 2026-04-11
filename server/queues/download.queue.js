@@ -1,5 +1,5 @@
 import { downloadQueue } from '../queue.js'
-import { getDownloadedFileNames, verifyDownloads } from '../services/download.service.js'
+import { getDownloadedFileNames, verifyDownloads } from '../services/file.service.js'
 
 export async function addDownloadJobBulk({ metadata, searchResults } = {}) {
   const downloads = await getDownloadedFileNames(metadata)
