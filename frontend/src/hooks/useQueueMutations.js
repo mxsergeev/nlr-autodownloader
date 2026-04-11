@@ -33,11 +33,11 @@ export function useQueueMutations() {
       qc.setQueryData(['queue'], (old) => old?.filter((q) => q.id !== id) ?? [])
       return { prev }
     },
-    onError: (_err, _id, ctx) => {
+    onError: (err, _id, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
       setSnackbar({
         open: true,
-        message: _err?.response?.data?.error || _err?.message || 'Failed to remove query',
+        message: err?.response?.data?.error || err?.message || 'Failed to remove query',
         severity: 'error',
       })
     },
@@ -57,11 +57,11 @@ export function useQueueMutations() {
       )
       return { prev }
     },
-    onError: (_err, _id, ctx) => {
+    onError: (err, _id, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
       setSnackbar({
         open: true,
-        message: _err?.response?.data?.error || _err?.message || 'Failed to retry query',
+        message: err?.response?.data?.error || err?.message || 'Failed to retry query',
         severity: 'error',
       })
     },
@@ -79,16 +79,19 @@ export function useQueueMutations() {
       qc.setQueryData(['queue'], (old) =>
         old?.map((q) => {
           if (q.id !== id) return q
-          return { ...q, status: q.status === 'paused' ? 'downloading' : 'paused' }
+          const nextStatus = q.status === 'paused'
+            ? 'downloading'
+            : ['downloading', 'pending'].includes(q.status) ? 'paused' : q.status
+          return { ...q, status: nextStatus }
         }) ?? []
       )
       return { prev }
     },
-    onError: (_err, _id, ctx) => {
+    onError: (err, _id, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
       setSnackbar({
         open: true,
-        message: _err?.response?.data?.error || _err?.message || 'Failed to pause/resume query',
+        message: err?.response?.data?.error || err?.message || 'Failed to pause/resume query',
         severity: 'error',
       })
     },
@@ -113,11 +116,11 @@ export function useQueueMutations() {
       )
       return { prev }
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
       setSnackbar({
         open: true,
-        message: _err?.response?.data?.error || _err?.message || 'Failed to pause item',
+        message: err?.response?.data?.error || err?.message || 'Failed to pause item',
         severity: 'error',
       })
     },
@@ -141,11 +144,11 @@ export function useQueueMutations() {
       )
       return { prev }
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
       setSnackbar({
         open: true,
-        message: _err?.response?.data?.error || _err?.message || 'Failed to remove item',
+        message: err?.response?.data?.error || err?.message || 'Failed to remove item',
         severity: 'error',
       })
     },
