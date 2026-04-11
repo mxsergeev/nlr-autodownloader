@@ -100,6 +100,14 @@ export async function updateSearchResult(id, data) {
   await prisma.searchResult.update({ where: { id: Number(id) }, data })
 }
 
+/**
+ * Deletes a single SearchResult by id.
+ * @param {number} id
+ */
+export async function deleteSearchResult(id) {
+  await prisma.searchResult.delete({ where: { id: Number(id) } })
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
