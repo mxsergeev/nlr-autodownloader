@@ -1,5 +1,4 @@
 import React from 'react'
-import axios from 'axios'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Box, Container, Typography, CircularProgress, Alert, IconButton, Tooltip, Fade } from '@mui/material'
 import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded'
@@ -8,11 +7,7 @@ import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import { useColorMode } from './ThemeContext'
 import AddQueryForm from './components/AddQueryForm'
 import QueueList from './components/QueueList'
-
-const fetchQueue = async () => {
-  const { data } = await axios.get('/playwright/queue')
-  return data.queue || []
-}
+import { fetchQueue, addQuery } from './api/queue.api.js'
 
 export default function App() {
   const qc = useQueryClient()
@@ -30,12 +25,7 @@ export default function App() {
   })
 
   const mutation = useMutation({
-    mutationFn: async (url) => {
-      const { data } = await axios.post('/playwright/queue', {
-        queries: [{ url }],
-      })
-      return data
-    },
+    mutationFn: (url) => addQuery(url),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue'] })
     },
