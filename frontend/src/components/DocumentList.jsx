@@ -4,18 +4,24 @@ import {
   Box,
   Collapse,
   Divider,
+  IconButton,
   ListItem,
   ListItemText,
   Tooltip,
   Typography,
 } from '@mui/material'
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
+import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import PauseRoundedIcon from '@mui/icons-material/PauseRounded'
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded'
 import StatusChip from './StatusChip'
 
-const ITEM_HEIGHT = 50
+const ITEM_HEIGHT = 60
 
-function DocumentRow({ index, style, documents }) {
+function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteItem }) {
   const doc = documents[index]
+  const isPaused = doc.status === 'paused'
+  const canPause = ['pending', 'paused'].includes(doc.status)
 
   return (
     <Box style={style} sx={{ px: 1, py: 0.5, boxSizing: 'border-box' }}>
@@ -28,8 +34,37 @@ function DocumentRow({ index, style, documents }) {
           borderColor: 'divider',
         }}
         secondaryAction={
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             <StatusChip status={doc.status} />
+            {canPause && (
+              <Tooltip title={isPaused ? 'Resume' : 'Pause'}>
+                <IconButton
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onPauseItem?.(queryId, doc.id)
+                  }}
+                >
+                  {isPaused ? (
+                    <PlayArrowRoundedIcon sx={{ fontSize: 14 }} />
+                  ) : (
+                    <PauseRoundedIcon sx={{ fontSize: 14 }} />
+                  )}
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="Remove">
+              <IconButton
+                size="small"
+                color="error"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDeleteItem?.(queryId, doc.id)
+                }}
+              >
+                <DeleteRoundedIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
           </Box>
         }
       >
@@ -42,7 +77,7 @@ function DocumentRow({ index, style, documents }) {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                maxWidth: 'calc(100% - 120px)',
+                maxWidth: 'calc(100% - 180px)',
                 fontSize: '0.85rem',
               }}
             >
@@ -79,19 +114,31 @@ function DocumentRow({ index, style, documents }) {
  * @param {{
  *   searchResults: import('../../../shared/types.js').SearchResult[],
  *   isOpen: boolean,
+ *   queryId: number,
+ *   onPauseItem: (queryId: number, itemId: number) => void,
+ *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-export default function DocumentList({ searchResults, isOpen }) {
+export default function DocumentList({ searchResults, isOpen, queryId, onPauseItem, onDeleteItem }) {
   const documents = Array.isArray(searchResults) ? searchResults : []
   const height = Math.min(400, documents.length * ITEM_HEIGHT)
 
   const Row = React.useCallback(
-    ({ index, style }) => <DocumentRow index={index} style={style} documents={documents} />,
-    [documents],
+    ({ index, style }) => (
+      <DocumentRow
+        index={index}
+        style={style}
+        documents={documents}
+        queryId={queryId}
+        onPauseItem={onPauseItem}
+        onDeleteItem={onDeleteItem}
+      />
+    ),
+    [documents, queryId, onPauseItem, onDeleteItem],
   )
 
   return (
-    <Collapse in={isOpen} timeout="auto" unmountOnExit>
+    <Collapse in={isOpen} timeout={200}>
       <Box sx={{ p: 1 }}>
         <Divider />
         <Box sx={{ px: 1, py: 1 }}>

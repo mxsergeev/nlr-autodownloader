@@ -17,3 +17,11 @@ export const retryQuery = (id) => axios.post(`/api/queue/${id}/retry`).then((r) 
 
 /** @returns {Promise<{ paused: boolean, id: number, status: string }>} */
 export const pauseQuery = (id) => axios.post(`/api/queue/${id}/pause`).then((r) => r.data)
+
+/** @returns {Promise<{ paused: boolean, id: number }>} */
+export const pauseItem = (queryId, itemId) =>
+  axios.post(`/api/queue/${queryId}/items/${itemId}/pause`).then((r) => r.data)
+
+/** @returns {Promise<{ removed: number }>} */
+export const deleteItem = (queryId, itemId) =>
+  axios.delete(`/api/queue/${queryId}/items/${itemId}`).then((r) => r.data)

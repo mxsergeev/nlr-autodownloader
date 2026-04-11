@@ -9,7 +9,8 @@ import { useQueueMutations } from '../hooks/useQueueMutations'
  * @param {{ queue: import('../../../shared/types.js').Query[] }} props
  */
 export default function QueueList({ queue }) {
-  const { deleteMutation, retryMutation, pauseMutation, snackbar, closeSnackbar } = useQueueMutations()
+  const { deleteMutation, retryMutation, pauseMutation, pauseItemMutation, deleteItemMutation, snackbar, closeSnackbar } =
+    useQueueMutations()
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [selectedItem, setSelectedItem] = React.useState(null)
 
@@ -30,6 +31,14 @@ export default function QueueList({ queue }) {
     pauseMutation.mutate(id, {
       onSettled: () => setSelectedItem(null),
     })
+  }
+
+  const requestPauseItem = (queryId, itemId) => {
+    pauseItemMutation.mutate({ queryId, itemId })
+  }
+
+  const requestDeleteItem = (queryId, itemId) => {
+    deleteItemMutation.mutate({ queryId, itemId })
   }
 
   const confirmDelete = () => {
@@ -89,6 +98,8 @@ export default function QueueList({ queue }) {
             onRequestDelete={requestDelete}
             onRetry={requestRetry}
             onPause={requestPause}
+            onPauseItem={requestPauseItem}
+            onDeleteItem={requestDeleteItem}
           />
         ))}
       </Box>

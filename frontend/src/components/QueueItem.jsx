@@ -79,9 +79,11 @@ const ExpandButton = styled(IconButton, {
  *   onRequestDelete: (item: object) => void,
  *   onRetry: (item: object) => void,
  *   onPause: (id: number) => void,
+ *   onPauseItem: (queryId: number, itemId: number) => void,
+ *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-export default function QueueItem({ item, index, isDeleting, isRetrying, isPausing, onRequestDelete, onRetry, onPause }) {
+export default function QueueItem({ item, index, isDeleting, isRetrying, isPausing, onRequestDelete, onRetry, onPause, onPauseItem, onDeleteItem }) {
   const [expanded, setExpanded] = React.useState(false)
 
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
@@ -233,7 +235,13 @@ export default function QueueItem({ item, index, isDeleting, isRetrying, isPausi
         </Box>
       </CardContent>
 
-      <DocumentList searchResults={item.searchResults} isOpen={expanded} />
+      <DocumentList
+        searchResults={item.searchResults}
+        isOpen={expanded}
+        queryId={item.id}
+        onPauseItem={onPauseItem}
+        onDeleteItem={onDeleteItem}
+      />
     </Card>
   )
 }
