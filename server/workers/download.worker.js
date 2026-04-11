@@ -23,9 +23,10 @@ async function updateMetadataStatus(md, status) {
 
   if (downloads.size >= total) {
     metadata.status = 'completed'
-  } else {
+  } else if (metadata.status !== 'paused') {
     metadata.status = status
   }
+  // If paused, keep paused but still update progress counts
 
   await upsertMetadata({ id: metadata.id }, metadata).catch(() => null)
 }
@@ -45,10 +46,15 @@ export const downloadWorker = new Worker(
 downloadWorker.on('failed', async (job, err) => {
   const { metadata, item } = job.data || {}
 
-  updateMetadataStatus(metadata, 'download_blocked').catch(() => null)
-  updateSearchResultStatus(item, 'download_blocked').catch(() => null)
+  if (job && job.attemptsMade >= (job.opts?.attempts ?? 1)) {
+    updateMetadataStatus(metadata, 'download_blocked').catch(() => null)
+    updateSearchResultStatus(item, 'download_blocked').catch(() => null)
+  }
 
-  console.error(`[Download] Job ${job?.id} failed for ${item?.fileName}:`, err.message)
+  console.error(
+    `[Download] Job ${job?.id} (attempt ${job?.attemptsMade}/${job?.opts?.attempts ?? 1}) failed for ${item?.fileName}:`,
+    err.message,
+  )
 })
 
 downloadWorker.on('completed', async (job) => {
