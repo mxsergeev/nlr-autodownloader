@@ -14,9 +14,10 @@ services:
     volumes:
       - ./server/:/app
       - ./shared/:/app/shared
+      - ./shared/:/shared
       - /app/node_modules
       - .env:/.env:ro
-      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
+      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads
       - queries_data:/data/queries
     depends_on:
       postgres:
