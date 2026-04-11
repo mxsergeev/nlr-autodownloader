@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq'
 import { connection } from '../queue.js'
-import { scrapSearchResults, verifySearchResults } from '../services/download.service.js'
+import { scrapSearchResults, verifySearchResults } from '../services/scraper.service.js'
 import { getMetadata, getSearchResults, saveSearchResults, upsertMetadata } from '../services/db.service.js'
 import { addDownloadJobBulk } from '../queues/download.queue.js'
 

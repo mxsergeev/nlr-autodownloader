@@ -1,7 +1,8 @@
 import { Worker } from 'bullmq'
-import { connection } from '../queue.js'
-import { scrapDownload, DOWNLOADS_DIR, getDownloadedFileNames } from '../services/download.service.js'
 import path from 'path'
+import { connection } from '../queue.js'
+import { scrapDownload } from '../services/scraper.service.js'
+import { DOWNLOADS_DIR, getDownloadedFileNames } from '../services/file.service.js'
 import { getMetadata, updateSearchResult, upsertMetadata } from '../services/db.service.js'
 
 const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10) || 1

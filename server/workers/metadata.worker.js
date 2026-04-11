@@ -2,7 +2,8 @@ import { Worker } from 'bullmq'
 import { connection } from '../queue.js'
 import { getMetadata, upsertMetadata } from '../services/db.service.js'
 import { addSearchJob } from '../queues/search.queue.js'
-import { queueQuery, scrapMetadata } from '../services/download.service.js'
+import { queueQuery } from '../services/query.service.js'
+import { scrapMetadata } from '../services/scraper.service.js'
 
 export const metadataWorker = new Worker(
   'metadataQueue',
