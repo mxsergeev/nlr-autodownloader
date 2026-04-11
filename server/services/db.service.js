@@ -60,7 +60,7 @@ export async function getAllMetadata() {
 /**
  * Deletes the query record (and its search results via CASCADE).
  */
-export async function deleteMetadata(id) {
+export async function deleteMetadata({ id }) {
   await prisma.query.delete({ where: { id } })
 }
 

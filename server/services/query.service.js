@@ -43,25 +43,25 @@ export async function queueQuery(params, { order = 0 } = {}) {
 export async function removeQuery(params, { removeDownloads = true } = {}) {
   const metadata = await getMetadata({ id: Number(params.id) })
 
-  if (metadata) {
-    const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`)
-    try {
-      if (searchJob) await searchJob.remove()
+  if (!metadata) return
 
-      if (metadata.searchResults?.length > 0) {
-        const downloadJobs = (
-          await Promise.allSettled(
-            metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`)),
-          )
+  const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`)
+  try {
+    if (searchJob) await searchJob.remove()
+
+    if (metadata.searchResults?.length > 0) {
+      const downloadJobs = (
+        await Promise.allSettled(
+          metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`)),
         )
-          .filter((r) => r.status === 'fulfilled' && r.value)
-          .map((r) => r.value)
+      )
+        .filter((r) => r.status === 'fulfilled' && r.value)
+        .map((r) => r.value)
 
-        await Promise.allSettled(downloadJobs.map((j) => j.remove()))
-      }
-    } catch (err) {
-      console.error(`Error removing jobs for query ${metadata.id}:`, err)
+      await Promise.allSettled(downloadJobs.map((j) => j.remove()))
     }
+  } catch (err) {
+    console.error(`Error removing jobs for query ${metadata.id}:`, err)
   }
 
   await deleteMetadata({ id: Number(params.id) })
