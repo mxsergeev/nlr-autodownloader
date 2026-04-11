@@ -1,441 +1,17 @@
 import React from 'react'
-import axios from 'axios'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { RETRYABLE_STATUSES } from '@shared/constants.js'
-import { List } from 'react-window'
-import {
-  Box,
-  Card,
-  CardContent,
-  Chip,
-  Typography,
-  Tooltip,
-  Divider,
-  ListItem,
-  ListItemText,
-  IconButton,
-  Collapse,
-  Snackbar,
-  Alert,
-  CircularProgress,
-} from '@mui/material'
-import ConfirmDialog from './ConfirmDialog'
-import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded'
-import LinkRoundedIcon from '@mui/icons-material/LinkRounded'
-import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded'
+import { Alert, Box, Snackbar, Typography } from '@mui/material'
 import InboxRoundedIcon from '@mui/icons-material/InboxRounded'
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
-import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
-import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
-import PauseRoundedIcon from '@mui/icons-material/PauseRounded'
-import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded'
-import { styled } from '@mui/material/styles'
+import ConfirmDialog from './ConfirmDialog'
+import QueueItem from './QueueItem'
+import { useQueueMutations } from '../hooks/useQueueMutations'
 
-function formatTimestamp(value) {
-  if (!value) return 'N/A'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString()
-}
-
-const STATUS_CONFIG = {
-  pending: { label: 'Pending', color: 'default' },
-  downloading: { label: 'Downloading', color: 'primary' },
-  completed: { label: 'Completed', color: 'success' },
-  download_blocked: { label: 'Download Blocked', color: 'error' },
-  search_failed: { label: 'Search Failed', color: 'error' },
-  paused: { label: 'Paused', color: 'warning' },
-}
-
-function StatusChip({ status }) {
-  const key = (status ?? '').toLowerCase()
-  const config = STATUS_CONFIG[key] ?? { label: status || 'Unknown', color: 'default' }
-  return (
-    <Chip
-      label={config.label}
-      color={config.color}
-      size="small"
-      variant={config.color === 'default' ? 'outlined' : 'filled'}
-      sx={{ fontWeight: 600, fontSize: '0.7rem', height: 22, letterSpacing: '0.03em' }}
-    />
-  )
-}
-
-function MetaItem({ icon, label, value, truncate = false }) {
-  const content = (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', flexShrink: 0 }}>{icon}</Box>
-      <Typography
-        variant="caption"
-        sx={{
-          color: 'text.secondary',
-          fontWeight: 500,
-          mr: 0.5,
-          flexShrink: 0,
-        }}
-      >
-        {label}
-      </Typography>
-      <Typography
-        variant="caption"
-        sx={{
-          color: 'text.primary',
-          ...(truncate
-            ? {
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                minWidth: 0,
-              }
-            : {}),
-        }}
-      >
-        {value}
-      </Typography>
-    </Box>
-  )
-
-  return truncate ? (
-    <Tooltip title={value} placement="bottom-start">
-      <Box sx={{ minWidth: 0, flex: 1 }}>{content}</Box>
-    </Tooltip>
-  ) : (
-    <Box>{content}</Box>
-  )
-}
-
-// Styled expand button that rotates when expanded
-const ExpandButton = styled(IconButton, {
-  shouldForwardProp: (prop) => prop !== 'expand',
-})(({ theme, expand }) => ({
-  transform: expand ? 'rotate(180deg)' : 'rotate(0deg)',
-  transition: theme.transitions.create('transform', {
-    duration: theme.transitions.duration.shortest,
-  }),
-  color: theme.palette.text.secondary,
-}))
-
-function QueueItem({ item, index, isPending, isRetrying, onRequestDelete, onRetry }) {
-  const [expanded, setExpanded] = React.useState(false)
-  const qc = useQueryClient()
-
-  const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
-  const created = formatTimestamp(item.createdAt)
-  const resultsCount = Array.isArray(item.searchResults) ? item.searchResults.length : (item.results ?? 'N/A')
-  const status = (item.status ?? '').toLowerCase()
-
-  const pauseMutation = useMutation({
-    mutationFn: async (id) => {
-      await axios.post(`/playwright/queue/${id}/pause`)
-      return id
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['queue'] })
-    },
-  })
-
-  const toggle = (ev) => {
-    setExpanded((s) => !s)
-  }
-
-  const handleDelete = (e) => {
-    e.stopPropagation()
-    if (!item?.id) return
-    onRequestDelete && onRequestDelete(item)
-  }
-
-  const handleRetry = (e) => {
-    e.stopPropagation()
-    if (!item?.id) return
-    onRetry && onRetry(item)
-  }
-
-  const handlePause = (e) => {
-    e.stopPropagation()
-    if (!item?.id) return
-    pauseMutation.mutate(item.id)
-  }
-
-  const isPaused = status === 'paused'
-  const canPause = ['pending', 'downloading'].includes(status) || isPaused
-  const canRetry = RETRYABLE_STATUSES.includes(status)
-
-  const searchResults = Array.isArray(item.searchResults) ? item.searchResults : []
-
-  return (
-    <Card
-      variant="outlined"
-      sx={{
-        borderColor: 'divider',
-        transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-        '&:hover': {
-          borderColor: 'primary.main',
-          boxShadow: (theme) => `0 0 0 1px ${theme.palette.primary.main}44`,
-        },
-      }}
-    >
-        <CardContent
-          onClick={toggle}
-          sx={{
-            p: '12px 16px !important',
-            cursor: 'pointer',
-            opacity: status === 'pending' ? 0.7 : 1,
-            backgroundColor: status === 'search_failed' ? 'rgba(211, 47, 47, 0.08)' : 'transparent',
-          }}
-        >
-        {/* Top row: URL label + status chip + expand button */}
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flex: 1, minWidth: 0 }}>
-            {status === 'pending' && (
-              <CircularProgress size={14} thickness={4} sx={{ flexShrink: 0 }} />
-            )}
-            {status !== 'pending' && <LinkRoundedIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0, mt: '1px' }} />}
-            <Tooltip title={label} placement="top-start">
-              <Typography
-                variant="body2"
-                sx={{
-                  fontWeight: 600,
-                  color: 'text.primary',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: '0.82rem',
-                }}
-              >
-                {label}
-              </Typography>
-            </Tooltip>
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <StatusChip status={item.status} />
-            {canPause && (
-              <Tooltip title={isPaused ? 'Resume' : 'Pause'}>
-                <IconButton
-                  size="small"
-                  aria-label={isPaused ? 'Resume item' : 'Pause item'}
-                  color={isPaused ? 'warning' : 'default'}
-                  onClick={handlePause}
-                  disabled={pauseMutation.isPending || isPending || isRetrying}
-                >
-                  {isPaused ? (
-                    <PlayArrowRoundedIcon sx={{ fontSize: 18 }} />
-                  ) : (
-                    <PauseRoundedIcon sx={{ fontSize: 18 }} />
-                  )}
-                </IconButton>
-              </Tooltip>
-            )}
-            {canRetry && (
-              <Tooltip title="Retry">
-                <IconButton
-                  size="small"
-                  aria-label="Retry item"
-                  color="primary"
-                  onClick={handleRetry}
-                  disabled={isRetrying || isPending}
-                >
-                  <ReplayRoundedIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </Tooltip>
-            )}
-            <Tooltip title="Delete">
-              <IconButton
-                size="small"
-                aria-label="Delete item"
-                color="error"
-                onClick={(e) => {
-                  handleDelete(e)
-                }}
-                disabled={isPending || isRetrying}
-              >
-                <DeleteRoundedIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
-            <ExpandButton
-              aria-expanded={expanded}
-              aria-label={expanded ? 'Collapse item' : 'Expand item'}
-              expand={expanded ? 1 : 0}
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation()
-                setExpanded((s) => !s)
-              }}
-            >
-              <ExpandMoreIcon sx={{ fontSize: 18 }} />
-            </ExpandButton>
-          </Box>
-        </Box>
-
-        <Divider sx={{ mb: 1, borderColor: 'divider' }} />
-
-        {status === 'search_failed' && (
-          <Alert severity="error" sx={{ mb: 1, fontSize: '0.85rem' }}>
-            {item.pendingError || 'This job failed. You can retry it.'}
-          </Alert>
-        )}
-
-        {/* Bottom row: meta info */}
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: { xs: 1, sm: 2.5 },
-            alignItems: 'center',
-          }}
-        >
-          <MetaItem icon={<LibraryBooksRoundedIcon sx={{ fontSize: 13 }} />} label="Results:" value={resultsCount} />
-          <MetaItem icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />} label="Created:" value={created} />
-        </Box>
-      </CardContent>
-
-      {/* Expandable area: list of documents */}
-      <Collapse in={expanded} timeout="auto" unmountOnExit>
-        <Box sx={{ p: 1 }}>
-          <Divider />
-          <Box sx={{ px: 1, py: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <DescriptionRoundedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-              <Typography variant="subtitle2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                Documents ({searchResults.length})
-              </Typography>
-            </Box>
-
-            {searchResults.length === 0 ? (
-              <Typography variant="caption" sx={{ color: 'text.secondary', ml: 4 }}>
-                No documents found for this query.
-              </Typography>
-            ) : (
-              <VirtualizedDocumentList documents={searchResults} />
-            )}
-          </Box>
-        </Box>
-      </Collapse>
-    </Card>
-  )
-}
-
-function VirtualizedDocumentList({ documents }) {
-  const itemHeight = 50
-  const height = Math.min(400, documents.length * itemHeight)
-
-  const Row = ({ index, style }) => {
-    const doc = documents[index]
-    return (
-      <Box style={style} sx={{ px: 1, py: 0.5, boxSizing: 'border-box' }}>
-        <ListItem
-          sx={{
-            px: 1,
-            py: 0.5,
-            alignItems: 'center',
-            border: index < documents.length - 1 ? '1px solid' : 'none',
-            borderColor: 'divider',
-          }}
-          secondaryAction={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <StatusChip status={doc.status} />
-            </Box>
-          }
-        >
-          <ListItemText
-            primary={
-              <Typography
-                variant="body2"
-                sx={{
-                  fontWeight: 500,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  maxWidth: 'calc(100% - 120px)',
-                  fontSize: '0.85rem',
-                }}
-              >
-                {doc.fileName ?? doc.title ?? doc.href ?? 'Untitled'}
-              </Typography>
-            }
-            secondary={
-              doc.href ? (
-                <Tooltip title={doc.href}>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: 'text.secondary',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      maxWidth: '100%',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    {doc.href}
-                  </Typography>
-                </Tooltip>
-              ) : null
-            }
-          />
-        </ListItem>
-      </Box>
-    )
-  }
-
-  return (
-    <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-      <List
-        defaultHeight={height}
-        rowCount={documents.length}
-        rowHeight={itemHeight}
-        rowComponent={Row}
-        rowProps={{}}
-        style={{ width: '100%' }}
-      />
-    </Box>
-  )
-}
-
+/**
+ * @param {{ queue: import('../../../shared/types.js').Query[] }} props
+ */
 export default function QueueList({ queue }) {
-  const qc = useQueryClient()
+  const { deleteMutation, retryMutation, pauseMutation, snackbar, closeSnackbar } = useQueueMutations()
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [selectedItem, setSelectedItem] = React.useState(null)
-  const [snackbar, setSnackbar] = React.useState({ open: false, message: '', severity: 'success' })
-
-  const retryMutation = useMutation({
-    mutationFn: async (id) => {
-      await axios.post(`/playwright/queue/${id}/retry`)
-      return id
-    },
-    onSuccess: (id) => {
-      qc.invalidateQueries({ queryKey: ['queue'] })
-      setSnackbar({ open: true, message: `Retrying query ${id}`, severity: 'success' })
-      setSelectedItem(null)
-    },
-    onError: (err) => {
-      const serverMsg = err?.response?.data?.error
-      setSnackbar({
-        open: true,
-        message: serverMsg || err?.message || 'Failed to retry query',
-        severity: 'error',
-      })
-      setSelectedItem(null)
-    },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: async (id) => {
-      await axios.delete(`/playwright/queue/${id}`)
-      return id
-    },
-    onSuccess: (id) => {
-      qc.invalidateQueries({ queryKey: ['queue'] })
-      setSnackbar({ open: true, message: `Removed query ${id}`, severity: 'success' })
-      setDialogOpen(false)
-      setSelectedItem(null)
-    },
-    onError: (err) => {
-      setSnackbar({ open: true, message: err?.message || 'Failed to remove query', severity: 'error' })
-      setDialogOpen(false)
-      setSelectedItem(null)
-    },
-  })
 
   const requestDelete = (item) => {
     setSelectedItem(item)
@@ -444,15 +20,27 @@ export default function QueueList({ queue }) {
 
   const requestRetry = (item) => {
     setSelectedItem(item)
-    retryMutation.mutate(item.id)
+    retryMutation.mutate(item.id, {
+      onSettled: () => setSelectedItem(null),
+    })
+  }
+
+  const requestPause = (id) => {
+    setSelectedItem({ id })
+    pauseMutation.mutate(id, {
+      onSettled: () => setSelectedItem(null),
+    })
   }
 
   const confirmDelete = () => {
     if (!selectedItem?.id) return
-    deleteMutation.mutate(selectedItem.id)
+    deleteMutation.mutate(selectedItem.id, {
+      onSettled: () => {
+        setDialogOpen(false)
+        setSelectedItem(null)
+      },
+    })
   }
-
-  const closeSnackbar = () => setSnackbar((s) => ({ ...s, open: false }))
 
   if (!queue || queue.length === 0) {
     return (
@@ -480,14 +68,7 @@ export default function QueueList({ queue }) {
 
   return (
     <Box>
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 1.5,
-        }}
-      >
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
         <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.secondary', letterSpacing: '0.04em' }}>
           QUEUE
         </Typography>
@@ -502,10 +83,12 @@ export default function QueueList({ queue }) {
             key={item.id ?? item.pageUrl ?? `queue-item-${index}`}
             item={item}
             index={index}
-            isPending={deleteMutation.isPending && selectedItem?.id === item.id}
+            isDeleting={deleteMutation.isPending && selectedItem?.id === item.id}
             isRetrying={retryMutation.isPending && selectedItem?.id === item.id}
+            isPausing={pauseMutation.isPending && selectedItem?.id === item.id}
             onRequestDelete={requestDelete}
             onRetry={requestRetry}
+            onPause={requestPause}
           />
         ))}
       </Box>
