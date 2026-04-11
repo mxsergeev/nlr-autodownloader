@@ -1,7 +1,7 @@
 import express from 'express'
 import { getAllMetadata } from '../services/db.service.js'
 import { addMetadataJob } from '../queues/metadata.queue.js'
-import { removeQuery, retryQuery, togglePause } from '../services/query.service.js'
+import { removeQuery, retryQuery, togglePause, queueQuery, toggleItemPause, removeItem } from '../services/query.service.js'
 
 const router = express.Router()
 
@@ -27,6 +27,7 @@ router.post('/queue', async (req, res) => {
       if (!q.url) {
         return Promise.reject(new Error(`Query at index ${index} is missing 'url' field`))
       }
+      await queueQuery({ url: q.url }, { order: index })
       return addMetadataJob({ url: q.url })
     })
 
@@ -78,6 +79,31 @@ router.post('/queue/:id/pause', async (req, res) => {
     if (error.code === 'NOT_FOUND') return res.status(404).json({ error: error.message })
     console.error('Query pause error:', error)
     res.status(500).json({ error: 'Failed to pause query', message: error.message })
+  }
+})
+
+router.post('/queue/:id/items/:itemId/pause', async (req, res) => {
+  try {
+    const { id, itemId } = req.params
+    const result = await toggleItemPause(Number(id), Number(itemId))
+    res.json(result)
+  } catch (error) {
+    if (error.code === 'NOT_FOUND') return res.status(404).json({ error: error.message })
+    if (error.code === 'NOT_PAUSABLE') return res.status(400).json({ error: error.message })
+    console.error('Item pause error:', error)
+    res.status(500).json({ error: 'Failed to pause item', message: error.message })
+  }
+})
+
+router.delete('/queue/:id/items/:itemId', async (req, res) => {
+  try {
+    const { id, itemId } = req.params
+    await removeItem(Number(id), Number(itemId))
+    res.json({ removed: Number(itemId) })
+  } catch (error) {
+    if (error.code === 'NOT_FOUND') return res.status(404).json({ error: error.message })
+    console.error('Item removal error:', error)
+    res.status(500).json({ error: 'Failed to remove item', message: error.message })
   }
 })
 

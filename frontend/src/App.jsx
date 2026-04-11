@@ -26,7 +26,8 @@ export default function App() {
 
   const mutation = useMutation({
     mutationFn: (url) => addQuery(url),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (data?.queue) qc.setQueryData(['queue'], data.queue)
       qc.invalidateQueries({ queryKey: ['queue'] })
     },
     onError: (err, url) => {
