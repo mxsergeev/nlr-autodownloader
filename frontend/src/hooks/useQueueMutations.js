@@ -35,7 +35,11 @@ export function useQueueMutations() {
     },
     onError: (_err, _id, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
-      setSnackbar({ open: true, message: 'Failed to remove query', severity: 'error' })
+      setSnackbar({
+        open: true,
+        message: _err?.response?.data?.error || _err?.message || 'Failed to remove query',
+        severity: 'error',
+      })
     },
     onSuccess: (_, id) => {
       setSnackbar({ open: true, message: `Removed query ${id}`, severity: 'success' })
@@ -82,6 +86,11 @@ export function useQueueMutations() {
     },
     onError: (_err, _id, ctx) => {
       qc.setQueryData(['queue'], ctx?.prev)
+      setSnackbar({
+        open: true,
+        message: _err?.response?.data?.error || _err?.message || 'Failed to pause/resume query',
+        severity: 'error',
+      })
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ['queue'] }),
   })
