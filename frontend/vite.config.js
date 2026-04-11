@@ -23,7 +23,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/playwright': {
+      '/api': {
         // proxy target is now configurable via VITE_SERVER_HOST / VITE_SERVER_PORT
         target: targetBase,
         changeOrigin: true,
