@@ -21,7 +21,8 @@ export default function App() {
   } = useQuery({
     queryKey: ['queue'],
     queryFn: fetchQueue,
-    refetchInterval: 3000,
+    refetchInterval: (query) =>
+      query.state.data?.some((q) => ['pending', 'downloading'].includes(q.status)) ? 500 : 3000,
   })
 
   const mutation = useMutation({
