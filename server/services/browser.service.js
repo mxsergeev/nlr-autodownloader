@@ -1,43 +1,63 @@
-import { chromium } from 'playwright'
+import { firefox } from 'playwright'
+import UserAgent from 'user-agents'
 
-/** @type {import('playwright').Browser | null} */
-let browser = null
+let browser
 
-/** @type {import('playwright').Page | null} */
-let page = null
+async function startBrowser() {
+  if (browser && browser.isConnected()) return
 
-/** @returns {Promise<void>} */
-export async function startBrowser() {
-  browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
-  page = await browser.newPage()
-}
-
-/** @returns {Promise<void>} */
-export async function stopBrowser() {
-  if (page) {
-    await page.close()
-    page = null
-  }
   if (browser) {
-    await browser.close()
-    browser = null
+    await stopBrowser()
   }
+
+  let headless
+
+  if (process.env.PLAYWRIGHT_HEADLESS !== undefined) {
+    headless = process.env.PLAYWRIGHT_HEADLESS === 'true'
+  } else {
+    headless = true
+  }
+
+  // Firefox is much more consistent in headless mode than Chromium
+  browser = await firefox.launch({
+    headless,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  })
+}
+
+async function stopBrowser() {
+  if (!browser) return
+  await browser.close().catch(() => {})
+  browser = undefined
 }
 
 /**
- * Returns the current Playwright page instance.
- * Throws if the browser has not been started.
- * @returns {import('playwright').Page}
+ * Runs a Playwright job in a fresh browser context with a random desktop user agent.
+ * Restarts the browser automatically if it has disconnected.
+ * @template T
+ * @param {(page: import('playwright').Page, context: import('playwright').BrowserContext) => Promise<T>} fn
+ * @returns {Promise<T>}
  */
-export function getPage() {
-  if (!page) throw new Error('Browser not started')
-  return page
-}
+export async function runJob(fn) {
+  if (!browser || !browser.isConnected()) await startBrowser()
 
-/**
- * Returns true if the browser is currently running.
- * @returns {boolean}
- */
-export function isBrowserRunning() {
-  return browser !== null && page !== null
+  let context
+
+  const userAgent = new UserAgent({ deviceCategory: 'desktop' })
+
+  try {
+    context = await browser.newContext({ userAgent: userAgent.toString() })
+  } catch {
+    // try restarting once
+    await stopBrowser()
+    await startBrowser()
+    context = await browser.newContext({ userAgent: userAgent.toString() })
+  }
+
+  const page = await context.newPage()
+  try {
+    return await fn(page, context)
+  } finally {
+    await context.close().catch(() => {})
+  }
 }

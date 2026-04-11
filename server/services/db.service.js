@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client'
-import { downloadQueue, searchQueue } from '../queue.js'
 
 export const prisma = new PrismaClient()
 
@@ -60,42 +59,9 @@ export async function getAllMetadata() {
 
 /**
  * Deletes the query record (and its search results via CASCADE).
- * Resolves to null if the record does not exist.
- * @param {{ id?: number, url?: string }} params
  */
-export async function deleteMetadata({ id }) {
-  if (!id) {
-    return null
-  }
-
-  const metadata = await getMetadata({ id: Number(id) })
-
-  if (!metadata) {
-    return null
-  }
-
-  const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`)
-
-  try {
-    if (searchJob) {
-      await searchJob.remove()
-    }
-
-    if (metadata.searchResults?.length > 0) {
-      const downloadJobs = (
-        await Promise.allSettled(metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`)))
-      )
-        .filter((r) => r.status === 'fulfilled' && r.value)
-        .map((r) => r.value)
-
-      await Promise.allSettled(downloadJobs.map((j) => j.remove()))
-    }
-
-    return prisma.query.delete({ where: { id: Number(id) } }).catch(() => null)
-  } catch (err) {
-    console.error(`Error removing jobs for query ${metadata.id}:`, err)
-    return null
-  }
+export async function deleteMetadata(id) {
+  await prisma.query.delete({ where: { id } })
 }
 
 /**
