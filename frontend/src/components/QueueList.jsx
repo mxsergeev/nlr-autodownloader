@@ -20,6 +20,9 @@ export default function QueueList({ queue }) {
   } = useQueueMutations();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [selectedItem, setSelectedItem] = React.useState(null);
+  const [selectedLabel, setSelectedLabel] = React.useState("");
+  const [itemDialogOpen, setItemDialogOpen] = React.useState(false);
+  const [selectedDocItem, setSelectedDocItem] = React.useState(null);
 
   // Destructure stable .mutate functions so useCallback deps are trackable by exhaustive-deps.
   // useMutation returns a new object every render; .mutate is stable (React Query wraps it in useCallback).
@@ -29,8 +32,9 @@ export default function QueueList({ queue }) {
   const { mutate: pauseItemMutate } = pauseItemMutation;
   const { mutate: deleteItemMutate } = deleteItemMutation;
 
-  const requestDelete = React.useCallback((item) => {
+  const requestDelete = React.useCallback((item, label) => {
     setSelectedItem(item);
+    setSelectedLabel(label ?? item?.pageUrl ?? `Query #${item?.id ?? ""}`);
     setDialogOpen(true);
   }, []);
 
@@ -62,11 +66,25 @@ export default function QueueList({ queue }) {
   );
 
   const requestDeleteItem = React.useCallback(
-    (queryId, itemId) => {
-      deleteItemMutate({ queryId, itemId });
+    (queryId, itemId, label) => {
+      setSelectedDocItem({ queryId, itemId, label: label ?? `Item #${itemId}` });
+      setItemDialogOpen(true);
     },
-    [deleteItemMutate]
+    []
   );
+
+  const confirmDeleteItem = React.useCallback(() => {
+    if (!selectedDocItem) return;
+    deleteItemMutate(
+      { queryId: selectedDocItem.queryId, itemId: selectedDocItem.itemId },
+      {
+        onSettled: () => {
+          setItemDialogOpen(false);
+          setSelectedDocItem(null);
+        },
+      }
+    );
+  }, [selectedDocItem, deleteItemMutate]);
 
   const confirmDelete = React.useCallback(() => {
     if (!selectedItem?.id) return;
@@ -137,14 +155,30 @@ export default function QueueList({ queue }) {
       <ConfirmDialog
         open={dialogOpen}
         title="Remove query"
-        content="Are you sure you want to remove this query from the queue? This action cannot be undone."
-        itemLabel={selectedItem?.pageUrl ?? `Query #${selectedItem?.id ?? ""}`}
+        content="Are you sure you want to remove this query from the queue?"
+        itemLabel={selectedLabel}
         loading={deleteMutation.isPending}
         onClose={() => {
           setDialogOpen(false);
           setSelectedItem(null);
+          setSelectedLabel("");
         }}
         onConfirm={confirmDelete}
+        confirmText="Remove"
+        cancelText="Cancel"
+      />
+
+      <ConfirmDialog
+        open={itemDialogOpen}
+        title="Remove document"
+        content="Are you sure you want to remove this document?"
+        itemLabel={selectedDocItem?.label}
+        loading={deleteItemMutation.isPending}
+        onClose={() => {
+          setItemDialogOpen(false);
+          setSelectedDocItem(null);
+        }}
+        onConfirm={confirmDeleteItem}
         confirmText="Remove"
         cancelText="Cancel"
       />

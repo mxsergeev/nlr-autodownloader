@@ -7,7 +7,7 @@ import {
   updateSearchResult,
   deleteSearchResult,
 } from "./db.service.js";
-import { DOWNLOADS_DIR, queryToString } from "./file.service.js";
+import { DOWNLOADS_DIR, queryToString, deleteDownloadedFile } from "./file.service.js";
 import { searchQueue, downloadQueue } from "../queue.js";
 import { addMetadataJob } from "../queues/metadata.queue.js";
 import { addDownloadJobBulk } from "../queues/download.queue.js";
@@ -251,6 +251,12 @@ export async function removeItem(queryId, itemId) {
   }
 
   await deleteSearchResult(Number(itemId));
+
+  try {
+    await deleteDownloadedFile(Number(queryId), item.fileName);
+  } catch (err) {
+    console.warn(`Could not delete file for item ${itemId}:`, err.message);
+  }
 
   if (metadata.results != null && metadata.results > 0) {
     await upsertMetadata({ id: Number(queryId) }, { ...metadata, results: metadata.results - 1 });

@@ -113,7 +113,7 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
                 color="error"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDeleteItem?.(queryId, doc.id);
+                  onDeleteItem?.(queryId, doc.id, docLabel);
                 }}
               >
                 <DeleteRoundedIcon sx={{ fontSize: 14 }} />

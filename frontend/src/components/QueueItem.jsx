@@ -182,7 +182,7 @@ export default React.memo(function QueueItem({
   const handleDelete = (e) => {
     e.stopPropagation();
     if (!item?.id) return;
-    onRequestDelete?.(item);
+    onRequestDelete?.(item, label);
   };
 
   const handleRetry = (e) => {
