@@ -14,8 +14,10 @@ import {
 import DescriptionRoundedIcon from "@mui/icons-material/DescriptionRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import { downloadItem } from "../api/queue.api.js";
 import StatusChip from "./StatusChip";
 
 const ITEM_HEIGHT = 60;
@@ -24,7 +26,9 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
   const doc = documents[index];
   const isPaused = doc.status === "paused";
   const canPause = ["pending", "paused"].includes(doc.status);
+  const canDownload = doc.status === "completed";
   const [copied, setCopied] = React.useState(false);
+  const [isDownloading, setIsDownloading] = React.useState(false);
 
   const handleCopyUrl = (e) => {
     e.stopPropagation();
@@ -33,6 +37,29 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const { blob, filename } = await downloadItem(queryId, doc.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently fail — the button will just stop spinning
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const docLabel = doc.fileName ?? doc.title ?? doc.href ?? "Untitled";
 
   return (
     <Box style={style} sx={{ px: 1, py: 0.5, boxSizing: "border-box" }}>
@@ -47,6 +74,22 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
         secondaryAction={
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
             <StatusChip status={doc.status} />
+            {canDownload && (
+              <Tooltip title="Download file">
+                <IconButton
+                  size="small"
+                  color="primary"
+                  disabled={isDownloading}
+                  onClick={handleDownload}
+                >
+                  {isDownloading ? (
+                    <CircularProgress size={14} />
+                  ) : (
+                    <DownloadRoundedIcon sx={{ fontSize: 14 }} />
+                  )}
+                </IconButton>
+              </Tooltip>
+            )}
             {canPause && (
               <Tooltip title={isPaused ? "Resume" : "Pause"}>
                 <IconButton
@@ -106,7 +149,7 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
                   minWidth: 0,
                 }}
               >
-                {doc.fileName ?? doc.title ?? doc.href ?? "Untitled"}
+                {docLabel}
               </Typography>
             </Box>
           }

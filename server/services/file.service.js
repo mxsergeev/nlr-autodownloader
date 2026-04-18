@@ -92,3 +92,35 @@ export function createZipStream(queryId) {
   archive.finalize();
   return archive;
 }
+
+/**
+ * Finds the full path of a downloaded file for a given query and base file name.
+ * Returns null if the file does not exist.
+ * @param {number} queryId
+ * @param {string} fileName  Base file name without extension (as stored in SearchResult.fileName)
+ * @returns {Promise<string | null>}  Full path including extension, or null
+ */
+export async function findDownloadedFile(queryId, fileName) {
+  const storageDir = path.join(DOWNLOADS_DIR, queryId.toString());
+  try {
+    const files = await fs.readdir(storageDir);
+    const match = files.find((f) => path.parse(f).name === fileName);
+    return match ? path.join(storageDir, match) : null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Deletes the downloaded file for a given query and base file name.
+ * Silently succeeds if the file or directory does not exist.
+ * @param {number} queryId
+ * @param {string} fileName  Base file name without extension
+ */
+export async function deleteDownloadedFile(queryId, fileName) {
+  const filePath = await findDownloadedFile(queryId, fileName);
+  if (filePath) {
+    await fs.rm(filePath, { force: true });
+  }
+}

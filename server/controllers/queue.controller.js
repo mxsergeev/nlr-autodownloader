@@ -9,7 +9,7 @@ import {
   toggleItemPause,
   removeItem,
 } from "../services/query.service.js";
-import { createZipStream } from "../services/file.service.js";
+import { createZipStream, findDownloadedFile } from "../services/file.service.js";
 
 const router = express.Router();
 
@@ -153,6 +153,39 @@ router.get("/queue/:id/download", async (req, res) => {
     zipStream.pipe(res);
   } catch (error) {
     console.error("Download error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to prepare download", message: error.message });
+    }
+  }
+});
+
+router.get("/queue/:id/items/:itemId/download", async (req, res) => {
+  try {
+    const { id, itemId } = req.params;
+    const query = await getMetadataById(Number(id));
+    if (!query) return res.status(404).json({ error: "Query not found" });
+
+    const item = (query.searchResults ?? []).find((r) => r.id === Number(itemId));
+    if (!item) return res.status(404).json({ error: "Item not found" });
+    if (item.status !== "completed") {
+      return res.status(409).json({ error: "File has not been downloaded yet." });
+    }
+
+    const filePath = await findDownloadedFile(Number(id), item.fileName);
+    if (!filePath) {
+      return res.status(404).json({ error: "File not found on disk." });
+    }
+
+    const ext = filePath.split(".").pop();
+    const filename = `${item.fileName}${ext ? `.${ext}` : ""}`;
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+    );
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error("Item download error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Failed to prepare download", message: error.message });
     }

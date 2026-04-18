@@ -33,3 +33,17 @@ export const deleteItem = (queryId, itemId) =>
 /** @returns {Promise<Blob>} */
 export const downloadQuery = (id) =>
   axios.get(`/api/queue/${id}/download`, { responseType: "blob" }).then((r) => r.data);
+
+/** @returns {Promise<{ blob: Blob, filename: string }>} */
+export const downloadItem = async (queryId, itemId) => {
+  const res = await axios.get(`/api/queue/${queryId}/items/${itemId}/download`, {
+    responseType: "blob",
+  });
+  const disposition = res.headers["content-disposition"] ?? "";
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const asciiMatch = disposition.match(/filename="([^"]+)"/i);
+  const filename = utf8Match
+    ? decodeURIComponent(utf8Match[1])
+    : (asciiMatch?.[1] ?? `item-${itemId}`);
+  return { blob: res.data, filename };
+};
