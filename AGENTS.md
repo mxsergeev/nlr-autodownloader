@@ -22,6 +22,6 @@ Fix any errors reported by the linter before finishing. Warnings are acceptable 
 
 ## Git
 
-**Never run `git commit`, `git push`, `git add`, or any other git write command automatically.**
+**Never run `git commit`, `git push`, `git add`, or any other git write command.**
 
 Always leave commits for the human to review and create manually.
