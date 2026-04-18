@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import globals from "globals";
 import { defineConfig } from "eslint/config";
+import eslintConfigPrettier from "eslint-config-prettier";
 
 export default defineConfig([
   { ignores: ["node_modules", "dist"] },
@@ -16,4 +17,5 @@ export default defineConfig([
       "no-unused-vars": ["warn", { varsIgnorePattern: "^[A-Z_]" }],
     },
   },
+  eslintConfigPrettier,
 ]);

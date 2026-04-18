@@ -14,6 +14,8 @@
     "smoke": "node scripts/smoke.js",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
@@ -30,9 +32,11 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/node": "^25.0.10",
-    "eslint": "^9.39.2",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
     "globals": "^17.1.0",
     "nodemon": "^3.1.11",
+    "prettier": "^3.8.3",
     "prisma": "^6.0.0"
   }
 }

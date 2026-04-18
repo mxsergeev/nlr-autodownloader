@@ -2,10 +2,15 @@
   "name": "nlr-autodownloader-frontend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "vite preview --port 5173"
+    "start": "vite preview --port 5173",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@emotion/react": "^11.12.0",
@@ -19,7 +24,14 @@
     "react-window": "^2.2.7"
   },
   "devDependencies": {
+    "@eslint-react/eslint-plugin": "^4.2.3",
+    "@eslint/js": "^10.0.1",
     "@vitejs/plugin-react": "^4.0.0",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.5.0",
+    "prettier": "^3.8.3",
     "vite": "^5.0.0"
   }
 }

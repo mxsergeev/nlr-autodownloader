@@ -3,28 +3,28 @@
  * @type {import("prettier").Config}
  */
 const config = {
-  arrowParens: 'always',
+  arrowParens: "always",
   bracketSameLine: false,
-  objectWrap: 'preserve',
+  objectWrap: "preserve",
   bracketSpacing: true,
   semi: false,
-  experimentalOperatorPosition: 'end',
+  experimentalOperatorPosition: "end",
   experimentalTernaries: false,
   singleQuote: true,
   jsxSingleQuote: false,
-  quoteProps: 'as-needed',
-  trailingComma: 'all',
+  quoteProps: "as-needed",
+  trailingComma: "all",
   singleAttributePerLine: false,
-  htmlWhitespaceSensitivity: 'css',
+  htmlWhitespaceSensitivity: "css",
   vueIndentScriptAndStyle: false,
-  proseWrap: 'preserve',
-  endOfLine: 'lf',
+  proseWrap: "preserve",
+  endOfLine: "lf",
   insertPragma: false,
   printWidth: 120,
   requirePragma: false,
   tabWidth: 2,
   useTabs: false,
-  embeddedLanguageFormatting: 'auto',
-}
+  embeddedLanguageFormatting: "auto",
+};
 
-export default config
+export default config;
