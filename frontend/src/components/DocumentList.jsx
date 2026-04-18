@@ -120,8 +120,6 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
 export default function DocumentList({ item, isOpen,  onPauseItem, onDeleteItem }) {
   const documents = Array.isArray(item.searchResults) ? item.searchResults : []
   const documentCount = item.searchResults?.length > 0 ? item.searchResults.length : item.results ?? 'N/A'
-  console.log('documentCount', documentCount)
-  console.log('item', item)
   const height = Math.min(400, documents.length * ITEM_HEIGHT)
 
   const Row = React.useCallback(

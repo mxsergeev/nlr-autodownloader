@@ -47,14 +47,23 @@ export async function upsertMetadata({ id, url }, metadata) {
 }
 
 /**
- * Returns all query records sorted by order ascending.
+ * Returns all query records sorted by order ascending (no searchResults — slim for polling).
  */
 export async function getAllMetadata() {
-  const records = await prisma.query.findMany({
-    orderBy: { order: 'asc' },
+  const records = await prisma.query.findMany({ orderBy: { order: 'asc' } })
+  return records.map(toSerializableQuery)
+}
+
+/**
+ * Returns a single query record with its searchResults.
+ * @param {number} id
+ */
+export async function getMetadataById(id) {
+  const record = await prisma.query.findUnique({
+    where: { id: Number(id) },
     include: { searchResults: true },
   })
-  return records.map(toSerializableQuery)
+  return record ? toSerializableQuery(record) : null
 }
 
 /**

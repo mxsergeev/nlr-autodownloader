@@ -9,6 +9,9 @@ export const fetchQueue = () => axios.get('/api/queue').then((r) => r.data.queue
  */
 export const addQuery = (url) => axios.post('/api/queue', { queries: [{ url }] }).then((r) => r.data)
 
+/** @returns {Promise<import('../../../shared/types.js').Query>} */
+export const fetchQueueItem = (id) => axios.get(`/api/queue/${id}`).then((r) => r.data.item)
+
 /** @returns {Promise<{ removed: number }>} */
 export const deleteQuery = (id) => axios.delete(`/api/queue/${id}`).then((r) => r.data)
 

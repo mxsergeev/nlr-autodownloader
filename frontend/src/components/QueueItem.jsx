@@ -1,4 +1,5 @@
 import React from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
   Box,
@@ -7,6 +8,7 @@ import {
   CircularProgress,
   Divider,
   IconButton,
+  LinearProgress,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -20,6 +22,7 @@ import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import PauseRoundedIcon from '@mui/icons-material/PauseRounded'
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded'
 import { RETRYABLE_STATUSES } from '@shared/constants.js'
+import { fetchQueueItem } from '../api/queue.api.js'
 import StatusChip from './StatusChip'
 import DocumentList from './DocumentList'
 
@@ -27,6 +30,34 @@ function formatTimestamp(value) {
   if (!value) return 'N/A'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString()
+}
+
+const ACTIVE_STATUSES = ['pending', 'fetching_metadata', 'fetching_results', 'downloading']
+
+function extractQueryLabel(url) {
+  try {
+    const u = new URL(url)
+    const queryParams = u.searchParams.getAll('query')
+    if (queryParams.length > 0) {
+      const OPERATORS = new Set(['AND', 'OR', 'NOT'])
+      const terms = queryParams
+        .map((qp) => {
+          const parts = qp.split(',')
+          // Format: fieldCode,matchType,value[,operator]
+          // Strip trailing boolean operator if present
+          const valueParts = parts.slice(2)
+          if (valueParts.length > 0 && OPERATORS.has(valueParts[valueParts.length - 1])) {
+            valueParts.pop()
+          }
+          return decodeURIComponent(valueParts.join(',').replace(/\+/g, ' ')).trim()
+        })
+        .filter(Boolean)
+      if (terms.length > 0) return terms.join(' · ')
+    }
+    return u.hostname
+  } catch {
+    return url
+  }
 }
 
 function MetaItem({ icon, label, value, truncate = false }) {
@@ -83,18 +114,48 @@ const ExpandButton = styled(IconButton, {
  *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-export default function QueueItem({ item, index, isDeleting, isRetrying, isPausing, onRequestDelete, onRetry, onPause, onPauseItem, onDeleteItem }) {
+export default React.memo(function QueueItem({ item, index, isDeleting, isRetrying, isPausing, onRequestDelete, onRetry, onPause, onPauseItem, onDeleteItem }) {
   const [expanded, setExpanded] = React.useState(false)
 
-  const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
+  // Fetch full card data (with searchResults) lazily when expanded.
+  // Main poll returns slim cards without searchResults to keep 1s polling fast.
+  const { data: detail } = useQuery({
+    queryKey: ['queue-item', item.id],
+    queryFn: () => fetchQueueItem(item.id),
+    enabled: expanded && !!item.id && !item.isPending,
+    refetchInterval: expanded ? 2000 : false,
+    staleTime: 1000,
+  })
+
+  // Merge slim item from poll with detailed data fetched on expand
+  const fullItem = detail ?? item
+
+  const label = item.pageUrl ? extractQueryLabel(item.pageUrl) : `Query #${item.id ?? index + 1}`
   const created = formatTimestamp(item.createdAt)
-  const resultsCount = item.searchResults?.length > 0 ? item.searchResults.length : (item.results ?? 'N/A')
+  const resultsCount = fullItem.searchResults?.length > 0 ? fullItem.searchResults.length : (item.results ?? 'N/A')
   const status = (item.status ?? '').toLowerCase()
 
   const isPaused = status === 'paused'
   const canPause = ['pending', 'downloading'].includes(status) || isPaused
   const canRetry = RETRYABLE_STATUSES.includes(status)
   const isActing = isDeleting || isRetrying || isPausing || item.isPending
+
+  const isFailed = status === 'search_failed' || status === 'download_blocked'
+  const lastAttempt = item.lastAttempt ? formatTimestamp(item.lastAttempt) : null
+  const isDownloading = status === 'downloading'
+  const downloadedCount = item.downloaded ?? 0
+  const totalCount = item.results ?? 0
+  const progressPercent = totalCount > 0 ? Math.min(100, (downloadedCount / totalCount) * 100) : 0
+
+  const resultCounts = React.useMemo(() => {
+    const counts = { completed: 0, download_blocked: 0, paused: 0 }
+    fullItem.searchResults?.forEach((r) => {
+      if (r.status === 'completed') counts.completed++
+      else if (r.status === 'download_blocked') counts.download_blocked++
+      else if (r.status === 'paused') counts.paused++
+    })
+    return counts
+  }, [fullItem.searchResults])
 
   const handleDelete = (e) => {
     e.stopPropagation()
@@ -138,8 +199,8 @@ export default function QueueItem({ item, index, isDeleting, isRetrying, isPausi
         {/* Top row: URL label + status chip + action buttons + expand */}
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flex: 1, minWidth: 0 }}>
-            {status === 'pending' && <CircularProgress size={14} thickness={4} sx={{ flexShrink: 0 }} />}
-            {status !== 'pending' && (
+            {ACTIVE_STATUSES.includes(status) && <CircularProgress size={14} thickness={4} sx={{ flexShrink: 0 }} />}
+            {!ACTIVE_STATUSES.includes(status) && (
               <LinkRoundedIcon sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0, mt: '1px' }} />
             )}
             <Tooltip title={label} placement="top-start">
@@ -229,18 +290,62 @@ export default function QueueItem({ item, index, isDeleting, isRetrying, isPausi
           </Alert>
         )}
 
+        {status === 'download_blocked' && (
+          <Alert severity="warning" sx={{ mb: 1, fontSize: '0.85rem' }}>
+            Some downloads were blocked by the archive. Retry to attempt missing files.
+          </Alert>
+        )}
+
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: { xs: 1, sm: 2.5 }, alignItems: 'center' }}>
           <MetaItem icon={<LibraryBooksRoundedIcon sx={{ fontSize: 13 }} />} label="Results:" value={resultsCount} />
           <MetaItem icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />} label="Created:" value={created} />
+          {isFailed && lastAttempt && (
+            <MetaItem icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />} label="Last attempt:" value={lastAttempt} />
+          )}
         </Box>
+
+        {isDownloading && totalCount > 0 && (
+          <Box sx={{ mt: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Downloading
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                {downloadedCount} / {totalCount} ({progressPercent.toFixed(0)}%)
+              </Typography>
+            </Box>
+            <LinearProgress variant="determinate" value={progressPercent} sx={{ borderRadius: 1, height: 6 }} />
+          </Box>
+        )}
+
+        {fullItem.searchResults?.length > 0 &&
+          (resultCounts.completed > 0 || resultCounts.download_blocked > 0 || resultCounts.paused > 0) && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 0.75 }}>
+              {resultCounts.completed > 0 && (
+                <Typography variant="caption" sx={{ color: 'success.main' }}>
+                  ✓ {resultCounts.completed} done
+                </Typography>
+              )}
+              {resultCounts.download_blocked > 0 && (
+                <Typography variant="caption" sx={{ color: 'error.main' }}>
+                  ✗ {resultCounts.download_blocked} blocked
+                </Typography>
+              )}
+              {resultCounts.paused > 0 && (
+                <Typography variant="caption" sx={{ color: 'warning.main' }}>
+                  ⏸ {resultCounts.paused} paused
+                </Typography>
+              )}
+            </Box>
+          )}
       </CardContent>
 
       <DocumentList
-        item={item}
+        item={fullItem}
         isOpen={expanded}
         onPauseItem={onPauseItem}
         onDeleteItem={onDeleteItem}
       />
     </Card>
   )
-}
+})

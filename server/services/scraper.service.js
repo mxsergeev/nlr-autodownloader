@@ -3,6 +3,9 @@ import path from 'path'
 import { runJob } from './browser.service.js'
 import { sanitizeFileName } from './file.service.js'
 
+const SCRAPE_PAGE_DELAY_MS = parseInt(process.env.SCRAPE_PAGE_DELAY_MS || '1200', 10)
+const DOWNLOAD_START_JITTER_MS = parseInt(process.env.DOWNLOAD_START_JITTER_MS || '1500', 10)
+
 /**
  * Scrapes query metadata (result count, pagination) from a Primo result page.
  * @param {{ url: string }} params
@@ -75,6 +78,11 @@ export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } =
           results.push(item)
         }
       }
+
+      if (curPart < (metadata.parts || 1)) {
+        const delay = SCRAPE_PAGE_DELAY_MS + Math.floor(Math.random() * SCRAPE_PAGE_DELAY_MS)
+        await page.waitForTimeout(delay)
+      }
     }
 
     return results
@@ -90,6 +98,10 @@ export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } =
 export async function scrapDownload(item, storageDir) {
   return runJob(async (page) => {
     await fs.mkdir(storageDir, { recursive: true })
+
+    if (DOWNLOAD_START_JITTER_MS > 0) {
+      await page.waitForTimeout(Math.floor(Math.random() * DOWNLOAD_START_JITTER_MS))
+    }
 
     let page1 = null
     let page2 = null

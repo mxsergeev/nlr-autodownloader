@@ -1,5 +1,5 @@
 import express from 'express'
-import { getAllMetadata } from '../services/db.service.js'
+import { getAllMetadata, getMetadataById } from '../services/db.service.js'
 import { addMetadataJob } from '../queues/metadata.queue.js'
 import { removeQuery, retryQuery, togglePause, queueQuery, toggleItemPause, removeItem } from '../services/query.service.js'
 
@@ -12,6 +12,17 @@ router.get('/queue', async (req, res) => {
   } catch (error) {
     console.error('Queue retrieval error:', error)
     res.status(500).json({ error: 'Failed to retrieve queue', message: error.message, name: error.name })
+  }
+})
+
+router.get('/queue/:id', async (req, res) => {
+  try {
+    const item = await getMetadataById(Number(req.params.id))
+    if (!item) return res.status(404).json({ error: 'Query not found' })
+    res.json({ item })
+  } catch (error) {
+    console.error('Queue item retrieval error:', error)
+    res.status(500).json({ error: 'Failed to retrieve queue item', message: error.message })
   }
 })
 

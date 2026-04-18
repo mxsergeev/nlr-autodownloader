@@ -53,7 +53,7 @@ export function useQueueMutations() {
       await qc.cancelQueries({ queryKey: ['queue'] })
       const prev = qc.getQueryData(['queue'])
       qc.setQueryData(['queue'], (old) =>
-        old?.map((q) => (q.id === id ? { ...q, status: 'pending' } : q)) ?? []
+        old?.map((q) => (q.id === id ? { ...q, status: 'fetching_metadata' } : q)) ?? []
       )
       return { prev }
     },
