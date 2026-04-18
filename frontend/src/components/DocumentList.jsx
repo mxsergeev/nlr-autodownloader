@@ -112,15 +112,16 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
 /**
  * Expandable list of documents for a queue item.
  * @param {{
- *   searchResults: import('../../../shared/types.js').SearchResult[],
  *   isOpen: boolean,
- *   queryId: number,
  *   onPauseItem: (queryId: number, itemId: number) => void,
  *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-export default function DocumentList({ searchResults, isOpen, queryId, onPauseItem, onDeleteItem }) {
-  const documents = Array.isArray(searchResults) ? searchResults : []
+export default function DocumentList({ item, isOpen,  onPauseItem, onDeleteItem }) {
+  const documents = Array.isArray(item.searchResults) ? item.searchResults : []
+  const documentCount = item.searchResults?.length > 0 ? item.searchResults.length : item.results ?? 'N/A'
+  console.log('documentCount', documentCount)
+  console.log('item', item)
   const height = Math.min(400, documents.length * ITEM_HEIGHT)
 
   const Row = React.useCallback(
@@ -129,12 +130,12 @@ export default function DocumentList({ searchResults, isOpen, queryId, onPauseIt
         index={index}
         style={style}
         documents={documents}
-        queryId={queryId}
+        queryId={item.id}
         onPauseItem={onPauseItem}
         onDeleteItem={onDeleteItem}
       />
     ),
-    [documents, queryId, onPauseItem, onDeleteItem],
+    [documents, item.id, onPauseItem, onDeleteItem],
   )
 
   return (
@@ -145,13 +146,13 @@ export default function DocumentList({ searchResults, isOpen, queryId, onPauseIt
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <DescriptionRoundedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
             <Typography variant="subtitle2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-              Documents ({documents.length})
+              Documents ({documentCount})
             </Typography>
           </Box>
 
-          {documents.length === 0 ? (
+          {documents.length  === 0 ? (
             <Typography variant="caption" sx={{ color: 'text.secondary', ml: 4 }}>
-              No documents found for this query.
+              {item.results === 0 ? 'No documents found for this query.' : item.results > 0 && documents.length === 0 ? 'Getting document details...' : 'No document details available.'}
             </Typography>
           ) : (
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>

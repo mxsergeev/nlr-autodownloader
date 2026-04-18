@@ -1,6 +1,6 @@
 # NLR Autodownloader
 
-Crawl and download documents from National Library of Russia (Primo) result pages using Playwright, BullMQ, Redis, and PostgreSQL.
+Crawl and download documents from National Library of Russia (Primo) result pages using Playwright, BullMQ, Redis, and SQLite.
 
 ## What this project does
 
@@ -8,7 +8,7 @@ Crawl and download documents from National Library of Russia (Primo) result page
 - Scrapes query metadata (result count, pages).
 - Scrapes all document links for each query.
 - Downloads document PDFs in parallel.
-- Stores queue state and document records in PostgreSQL.
+- Stores queue state and document records in SQLite.
 - Provides a React UI to add, retry, inspect, and remove queued queries.
 
 ## Stack and services
@@ -16,7 +16,7 @@ Crawl and download documents from National Library of Russia (Primo) result page
 - `server/`: Express API + BullMQ workers + Playwright scraper/downloader + Prisma.
 - `frontend/`: React 19 + MUI + TanStack Query queue manager UI.
 - `redis`: BullMQ backend.
-- `postgres`: persistent data for queries and search results.
+- `sqlite` (via Prisma): persistent data for queries and search results, stored in a Docker volume.
 
 Main queues:
 
@@ -77,7 +77,7 @@ Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_dat
 | `DOWNLOADS_DIR`        | `./data/downloads`                                            | Host directory mounted for downloaded files. |
 | `CONCURRENT_DOWNLOADS` | `2`                                                           | Download worker concurrency. |
 | `PLAYWRIGHT_HEADLESS`  | `true` (implicit if unset)                                   | Set to `false` to run browser non-headless. |
-| `DATABASE_URL`         | `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}` | Prisma/PostgreSQL connection string. |
+| `DATABASE_URL`         | `file:/data/queries/nlr.db`                                   | Prisma/SQLite database path (inside container). |
 
 ### Redis
 
@@ -88,18 +88,11 @@ Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_dat
 | `REDIS_PASSWORD` | `1234`  | Redis password. |
 | `REDIS_DB`       | `0`     | Redis database index. |
 
-### PostgreSQL
-
-| Variable            | Default                | Description |
-| ------------------- | ---------------------- | ----------- |
-| `POSTGRES_USER`     | `nlr`                  | PostgreSQL username. |
-| `POSTGRES_PASSWORD` | `nlr_secret`           | PostgreSQL password. |
-| `POSTGRES_DB`       | `nlr_autodownloader`   | PostgreSQL database name. |
 | `NEXTCLOUD_GID`     | `33`                   | Optional group id added to the server container. |
 
 ## API
 
-Base path: `/playwright`
+Base path: `/api`
 
 ### `GET /health`
 
@@ -109,11 +102,11 @@ Returns:
 { "status": "ok" }
 ```
 
-### `GET /playwright/queue`
+### `GET /api/queue`
 
 Returns all queued queries (ordered) with nested `searchResults`.
 
-### `POST /playwright/queue`
+### `POST /api/queue`
 
 Add one or more query URLs:
 
@@ -131,53 +124,79 @@ Each item must include `url`. Response includes updated queue and per-item failu
 { "failed": [], "queue": [...] }
 ```
 
-### `DELETE /playwright/queue/:id`
+### `DELETE /api/queue/:id`
 
 Removes a query by numeric id, removes related queued jobs, and deletes downloaded files for that query directory.
 
-### `POST /playwright/queue/:id/retry`
+### `POST /api/queue/:id/retry`
 
-Retries a query when status is retryable (`download_blocked`, `search_failed`, `pending`, `failed`).
+Retries a query when status is retryable (`download_blocked`, `search_failed`).
 
 - If status is `download_blocked`, only missing downloads are queued.
-- Otherwise, metadata scraping is queued again.
+- Otherwise, metadata scraping is queued again from the start.
+
+### `POST /api/queue/:id/pause`
+
+Toggles pause on a query. Removes waiting download jobs for pending items and marks them `paused`. Resuming re-queues those jobs.
+
+### `POST /api/queue/:id/items/:itemId/pause`
+
+Toggles pause on a single search result item.
+
+### `DELETE /api/queue/:id/items/:itemId`
+
+Removes a single search result item, cancels its queued job.
 
 ## Query status lifecycle
 
-`pending` -> `downloading` -> `completed`
+```
+pending
+  → fetching_metadata   (metadata worker started)
+  → fetching_results    (metadata scraped; search worker enqueued)
+  → downloading         (all download jobs enqueued)
+  → completed           (all files downloaded)
+```
 
-Failure-oriented states:
+Failure states:
 
-- `download_blocked`
-- `search_failed`
+- `search_failed` — metadata or search scraping failed after all retries
+- `download_blocked` — PDF download inaccessible after all retries
 
-Each search result row also stores an item-level status.
+Paused state:
+
+- `paused` — user paused the query; pending download jobs removed, items marked `paused`
+
+Each `SearchResult` row also stores an item-level status: `pending`, `completed`, `download_blocked`, or `paused`.
+
+Retryable statuses: `search_failed`, `download_blocked`.
 
 ## Pipeline
 
 ```text
-POST /playwright/queue
+POST /api/queue
         |
         v
 metadataQueue  -- scrape result count/parts and canonical page URL
-        |
+        |        (Query status: fetching_metadata → fetching_results)
         v
 searchQueue    -- scrape and persist all search result items
-        |
+        |        (Query status: fetching_results → downloading)
         v
 downloadQueue  -- download missing PDFs into DOWNLOADS_DIR/<queryId>/
+                  (Query status: downloading → completed)
 ```
 
-Jobs are persisted in Redis and metadata/search results are persisted in PostgreSQL.
-Failed download jobs are retried immediately (LIFO) before new downloads are processed, with a 2-second fixed backoff between retry attempts to respect remote server limits.
+Jobs are persisted in Redis and metadata/search results are persisted in SQLite via Prisma.
+Failed download jobs are retried (up to 10 times) with a 2-second fixed backoff between attempts.
 
 ## Frontend behavior
 
-The frontend (`frontend/`) polls `/playwright/queue` every 3 seconds and supports:
+The frontend (`frontend/`) polls `/api/queue` every 3 seconds and supports:
 
 - Adding URLs to queue.
 - Expanding query rows to inspect result items and statuses.
 - Retrying retryable queries.
+- Pausing/resuming queries and individual items.
 - Deleting queries with confirmation.
 
 In compose, frontend API proxy target is set by `VITE_SERVER_HOST`/`VITE_SERVER_PORT`.

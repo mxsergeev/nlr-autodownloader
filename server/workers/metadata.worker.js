@@ -2,7 +2,6 @@ import { Worker } from 'bullmq'
 import { connection } from '../queue.js'
 import { getMetadata, upsertMetadata } from '../services/db.service.js'
 import { addSearchJob } from '../queues/search.queue.js'
-import { queueQuery } from '../services/query.service.js'
 import { scrapMetadata } from '../services/scraper.service.js'
 
 export const metadataWorker = new Worker(
@@ -10,19 +9,28 @@ export const metadataWorker = new Worker(
   async (job) => {
     const { url } = job.data
 
-    const existing = await queueQuery({ url })
+    const existing = await getMetadata({ url })
 
+    // Mark as actively fetching metadata
+    if (existing) {
+      await upsertMetadata({ id: existing.id }, { status: 'fetching_metadata' })
+    }
+
+    // Short-circuit: if all search results are already in the DB, skip metadata re-scrape
     if (existing && existing.results > 0 && existing.searchResults.length === existing.results) {
+      await upsertMetadata({ id: existing.id }, { status: 'fetching_results' })
       await addSearchJob({ metadata: existing })
-
       return existing
     }
 
-    let metadata = await scrapMetadata({ url })
+    const scraped = await scrapMetadata({ url })
 
     // Keep pageUrl as the stable user-supplied key; store the resolved (sorted) URL
     // separately so search pagination builds correct page URLs without mutating the key.
-    metadata = await upsertMetadata({ url }, { ...metadata, pageUrl: url, searchUrl: metadata.pageUrl })
+    const metadata = await upsertMetadata(
+      { url },
+      { ...scraped, pageUrl: url, searchUrl: scraped.pageUrl, status: 'fetching_results' },
+    )
 
     if (metadata && metadata.results > 0) {
       await addSearchJob({ metadata })
@@ -41,7 +49,6 @@ metadataWorker.on('failed', async (job, err) => {
     await upsertMetadata(
       { id: metadata.id },
       {
-        ...metadata,
         status: 'search_failed',
         lastAttempt: new Date(),
       },

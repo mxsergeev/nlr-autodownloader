@@ -1,1 +1,1 @@
-export const RETRYABLE_STATUSES = ['pending', 'search_failed', 'download_blocked', 'failed']
+export const RETRYABLE_STATUSES = ['search_failed', 'download_blocked']

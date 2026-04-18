@@ -9,6 +9,8 @@ datasource db {
 
 enum QueryStatus {
   pending
+  fetching_metadata
+  fetching_results
   downloading
   completed
   download_blocked

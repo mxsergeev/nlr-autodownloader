@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq'
 import { connection } from '../queue.js'
 import { scrapSearchResults, verifySearchResults } from '../services/scraper.service.js'
-import { getMetadata, getSearchResults, saveSearchResults, upsertMetadata } from '../services/db.service.js'
+import { getSearchResults, saveSearchResults, upsertMetadata } from '../services/db.service.js'
 import { addDownloadJobBulk } from '../queues/download.queue.js'
 
 export const searchWorker = new Worker(
@@ -9,27 +9,35 @@ export const searchWorker = new Worker(
   async (job) => {
     const { metadata } = job.data
 
+    await upsertMetadata({ id: metadata.id }, { status: 'fetching_results' })
+
     let results
 
     const existing = await getSearchResults({ queryId: metadata.id })
 
     if (existing.length > 0 && verifySearchResults(existing, metadata)) {
+      // Cache hit: existing DB results are valid — use them directly (already have IDs)
       results = existing
-    }
-
-    if (!results) {
+    } else {
       results = await scrapSearchResults(metadata)
 
       if (verifySearchResults(results, metadata)) {
         await saveSearchResults({ queryId: metadata.id }, results)
+        // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
+        results = await getSearchResults({ queryId: metadata.id })
       } else {
         throw new Error('Scraped search results do not match expected metadata')
       }
     }
 
-    results = await getSearchResults({ queryId: metadata.id })
+    await upsertMetadata({ id: metadata.id }, { status: 'downloading' })
 
-    await addDownloadJobBulk({ metadata, searchResults: results })
+    const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results })
+
+    if (!hasJobs) {
+      // All files are already on disk — no download jobs to run, mark completed immediately
+      await upsertMetadata({ id: metadata.id }, { status: 'completed' })
+    }
 
     return { metadata, searchResults: results }
   },
@@ -40,18 +48,13 @@ searchWorker.on('failed', async (job, err) => {
   const { metadata } = job?.data || {}
 
   if (metadata && job && job.attemptsMade >= (job.opts?.attempts ?? 1)) {
-    const record = await getMetadata({ id: metadata.id })
-
-    if (record) {
-      await upsertMetadata(
-        { id: record.id },
-        {
-          ...record,
-          status: 'search_failed',
-          lastAttempt: new Date(),
-        },
-      ).catch(() => null)
-    }
+    await upsertMetadata(
+      { id: metadata.id },
+      {
+        status: 'search_failed',
+        lastAttempt: new Date(),
+      },
+    ).catch(() => null)
   }
 
   console.error(`[Search] Job ${job?.id} failed:`, err.message)

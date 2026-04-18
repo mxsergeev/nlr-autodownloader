@@ -88,7 +88,7 @@ export default function QueueItem({ item, index, isDeleting, isRetrying, isPausi
 
   const label = item.pageUrl ?? `Query #${item.id ?? index + 1}`
   const created = formatTimestamp(item.createdAt)
-  const resultsCount = Array.isArray(item.searchResults) ? item.searchResults.length : (item.results ?? 'N/A')
+  const resultsCount = item.searchResults?.length > 0 ? item.searchResults.length : (item.results ?? 'N/A')
   const status = (item.status ?? '').toLowerCase()
 
   const isPaused = status === 'paused'
@@ -236,9 +236,8 @@ export default function QueueItem({ item, index, isDeleting, isRetrying, isPausi
       </CardContent>
 
       <DocumentList
-        searchResults={item.searchResults}
+        item={item}
         isOpen={expanded}
-        queryId={item.id}
         onPauseItem={onPauseItem}
         onDeleteItem={onDeleteItem}
       />

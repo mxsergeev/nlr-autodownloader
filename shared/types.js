@@ -2,7 +2,7 @@
  * @typedef {Object} Query
  * @property {number} id
  * @property {string} pageUrl
- * @property {'pending'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'} status
+ * @property {'pending'|'fetching_metadata'|'fetching_results'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'} status
  * @property {number|null} results
  * @property {number|null} resultsPerPart
  * @property {number|null} parts

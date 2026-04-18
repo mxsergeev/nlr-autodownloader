@@ -3,7 +3,7 @@ import path from 'path'
 import { connection } from '../queue.js'
 import { scrapDownload } from '../services/scraper.service.js'
 import { DOWNLOADS_DIR, getDownloadedFileNames } from '../services/file.service.js'
-import { getMetadata, updateSearchResult, upsertMetadata } from '../services/db.service.js'
+import { getQueryStats, updateSearchResult, upsertMetadata } from '../services/db.service.js'
 
 const CONCURRENT_DOWNLOADS = parseInt(process.env.CONCURRENT_DOWNLOADS || '2', 10) || 1
 
@@ -11,24 +11,34 @@ async function updateSearchResultStatus(item, status) {
   await updateSearchResult(item.id, { status })
 }
 
+/**
+ * Updates the parent Query's download progress and status after a download event.
+ * Reads only { status, results } from the DB (not the full record) to minimise
+ * the read-modify-write window. Status is only changed if the query is not paused.
+ */
 async function updateMetadataStatus(md, status) {
-  const metadata = await getMetadata({ id: md.id })
+  const [current, downloads] = await Promise.all([getQueryStats(md.id), getDownloadedFileNames({ id: md.id })])
 
-  const downloads = await getDownloadedFileNames(metadata)
-  const total = metadata.results || 1
+  if (!current) return
 
-  metadata.lastAttempt = new Date()
-  metadata.downloaded = downloads.size
-  metadata.downloadProgress = parseFloat(((downloads.size / total) * 100).toFixed(2)) + '%'
+  const total = current.results || 1
+  const downloadCount = downloads.size
 
-  if (downloads.size >= total) {
-    metadata.status = 'completed'
-  } else if (metadata.status !== 'paused') {
-    metadata.status = status
+  let newStatus
+  if (downloadCount >= total) {
+    newStatus = 'completed'
+  } else if (current.status === 'paused') {
+    newStatus = 'paused' // preserve paused — still update progress counts below
+  } else {
+    newStatus = status
   }
-  // If paused, keep paused but still update progress counts
 
-  await upsertMetadata({ id: metadata.id }, metadata).catch(() => null)
+  await upsertMetadata({ id: md.id }, {
+    lastAttempt: new Date(),
+    downloaded: downloadCount,
+    downloadProgress: parseFloat(((downloadCount / total) * 100).toFixed(2)) + '%',
+    status: newStatus,
+  }).catch(() => null)
 }
 
 export const downloadWorker = new Worker(

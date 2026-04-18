@@ -7,6 +7,8 @@ const STATUS_CONFIG = {
   download_blocked: { label: 'Download Blocked', color: 'error' },
   search_failed: { label: 'Search Failed', color: 'error' },
   paused: { label: 'Paused', color: 'warning' },
+  fetching_metadata: { label: 'Fetching URL details', color: 'info' },
+  fetching_results: { label: 'Fetching document list', color: 'info' },
 }
 
 /**

@@ -131,21 +131,13 @@ export async function scrapDownload(item, storageDir) {
 }
 
 /**
- * Returns true if the scraped results are fresh (< 24 h old) and match the expected count
- * with no duplicates. Logs warnings for each violated condition.
+ * Returns true if the scraped results match the expected count with no duplicates.
+ * Logs warnings for each violated condition.
  * @param {import('../../shared/types.js').SearchResult[]} results
  * @param {import('../../shared/types.js').Query} metadata
  * @returns {boolean}
  */
 export function verifySearchResults(results, metadata) {
-  const createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null
-  const isFresh = createdAt && createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000)
-
-  if (!isFresh) {
-    console.warn(`[${metadata.id}] Warning: Search results are older than 24 hours. Consider refreshing.`)
-    return false
-  }
-
   if (results.length !== metadata.results) {
     console.warn(`[${metadata.id}] Warning: Expected ${metadata.results} results, but got ${results.length}.`)
     return false
