@@ -133,27 +133,24 @@ export default React.memo(function QueueItem({
 }) {
   const [expanded, setExpanded] = React.useState(false);
 
-  // Fetch full card data (with searchResults) lazily when expanded.
-  // Main poll returns slim cards without searchResults to keep 1s polling fast.
+  // Fetch full card data (with searchResults) eagerly on mount so it's already in cache
+  // when the user expands the card. Background polling only activates when expanded.
   const { data: detail, isLoading: isDetailLoading } = useQuery({
     queryKey: ["queue-item", item.id],
     queryFn: () => fetchQueueItem(item.id),
-    enabled: expanded && !!item.id && !item.isPending,
+    enabled: !!item.id && !item.isPending,
     refetchInterval: expanded ? 2000 : false,
     staleTime: 1000,
   });
 
   // item always has the freshest status/downloaded/etc from the 1s poll.
-  // detail contributes only searchResults (lazy-loaded on expand).
-  const fullItem = React.useMemo(
-    () => ({ ...item, searchResults: detail?.searchResults }),
-    [item, detail?.searchResults]
-  );
+  // searchResults come from the per-card detail query (lazy-loaded on expand).
 
   const label = item.pageUrl ? extractQueryLabel(item.pageUrl) : `Query #${item.id ?? index + 1}`;
   const created = formatTimestamp(item.createdAt);
+  const searchResults = detail?.searchResults;
   const resultsCount =
-    fullItem.searchResults?.length > 0 ? fullItem.searchResults.length : (item.results ?? "N/A");
+    searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
   const status = (item.status ?? "").toLowerCase();
 
   const isPaused = status === "paused";
@@ -170,13 +167,13 @@ export default React.memo(function QueueItem({
 
   const resultCounts = React.useMemo(() => {
     const counts = { completed: 0, download_blocked: 0, paused: 0 };
-    fullItem.searchResults?.forEach((r) => {
+    searchResults?.forEach((r) => {
       if (r.status === "completed") counts.completed++;
       else if (r.status === "download_blocked") counts.download_blocked++;
       else if (r.status === "paused") counts.paused++;
     });
     return counts;
-  }, [fullItem.searchResults]);
+  }, [searchResults]);
 
   const handleDelete = (e) => {
     e.stopPropagation();
@@ -361,7 +358,7 @@ export default React.memo(function QueueItem({
           </Box>
         )}
 
-        {fullItem.searchResults?.length > 0 &&
+        {searchResults?.length > 0 &&
           (resultCounts.completed > 0 ||
             resultCounts.download_blocked > 0 ||
             resultCounts.paused > 0) && (
@@ -386,7 +383,9 @@ export default React.memo(function QueueItem({
       </CardContent>
 
       <DocumentList
-        item={fullItem}
+        queryId={item.id}
+        results={item.results}
+        searchResults={searchResults}
         isOpen={expanded}
         isLoading={isDetailLoading && !detail}
         onPauseItem={onPauseItem}

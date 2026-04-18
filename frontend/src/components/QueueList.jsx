@@ -21,6 +21,14 @@ export default function QueueList({ queue }) {
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [selectedItem, setSelectedItem] = React.useState(null);
 
+  // Destructure stable .mutate functions so useCallback deps are trackable by exhaustive-deps.
+  // useMutation returns a new object every render; .mutate is stable (React Query wraps it in useCallback).
+  const { mutate: deleteMutate } = deleteMutation;
+  const { mutate: retryMutate } = retryMutation;
+  const { mutate: pauseMutate } = pauseMutation;
+  const { mutate: pauseItemMutate } = pauseItemMutation;
+  const { mutate: deleteItemMutate } = deleteItemMutation;
+
   const requestDelete = React.useCallback((item) => {
     setSelectedItem(item);
     setDialogOpen(true);
@@ -29,46 +37,46 @@ export default function QueueList({ queue }) {
   const requestRetry = React.useCallback(
     (item) => {
       setSelectedItem(item);
-      retryMutation.mutate(item.id, {
+      retryMutate(item.id, {
         onSettled: () => setSelectedItem(null),
       });
     },
-    [retryMutation]
+    [retryMutate]
   );
 
   const requestPause = React.useCallback(
     (id) => {
       setSelectedItem({ id });
-      pauseMutation.mutate(id, {
+      pauseMutate(id, {
         onSettled: () => setSelectedItem(null),
       });
     },
-    [pauseMutation]
+    [pauseMutate]
   );
 
   const requestPauseItem = React.useCallback(
     (queryId, itemId) => {
-      pauseItemMutation.mutate({ queryId, itemId });
+      pauseItemMutate({ queryId, itemId });
     },
-    [pauseItemMutation]
+    [pauseItemMutate]
   );
 
   const requestDeleteItem = React.useCallback(
     (queryId, itemId) => {
-      deleteItemMutation.mutate({ queryId, itemId });
+      deleteItemMutate({ queryId, itemId });
     },
-    [deleteItemMutation]
+    [deleteItemMutate]
   );
 
   const confirmDelete = React.useCallback(() => {
     if (!selectedItem?.id) return;
-    deleteMutation.mutate(selectedItem.id, {
+    deleteMutate(selectedItem.id, {
       onSettled: () => {
         setDialogOpen(false);
         setSelectedItem(null);
       },
     });
-  }, [selectedItem, deleteMutation]);
+  }, [selectedItem, deleteMutate]);
 
   if (!queue || queue.length === 0) {
     return (

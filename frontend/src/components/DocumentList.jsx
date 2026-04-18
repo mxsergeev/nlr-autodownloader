@@ -110,36 +110,47 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
   );
 }
 
+// Module-level component — stable reference, receives data via rowProps from react-window.
+function Row({ index, style, documents, queryId, onPauseItem, onDeleteItem }) {
+  return (
+    <DocumentRow
+      index={index}
+      style={style}
+      documents={documents}
+      queryId={queryId}
+      onPauseItem={onPauseItem}
+      onDeleteItem={onDeleteItem}
+    />
+  );
+}
+
 /**
  * Expandable list of documents for a queue item.
  * @param {{
+ *   queryId: number,
+ *   results: number | null,
+ *   searchResults: Array | undefined,
  *   isOpen: boolean,
+ *   isLoading: boolean,
  *   onPauseItem: (queryId: number, itemId: number) => void,
  *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-export default function DocumentList({ item, isOpen, isLoading, onPauseItem, onDeleteItem }) {
-  const documents = Array.isArray(item.searchResults) ? item.searchResults : [];
-  const documentCount =
-    item.searchResults?.length > 0 ? item.searchResults.length : (item.results ?? "N/A");
+function DocumentList({ queryId, results, searchResults, isOpen, isLoading, onPauseItem, onDeleteItem }) {
+  const documents = React.useMemo(
+    () => (Array.isArray(searchResults) ? searchResults : []),
+    [searchResults]
+  );
+  const documentCount = searchResults?.length > 0 ? searchResults.length : (results ?? "N/A");
   const height = Math.min(400, documents.length * ITEM_HEIGHT);
 
-  const Row = React.useCallback(
-    ({ index, style }) => (
-      <DocumentRow
-        index={index}
-        style={style}
-        documents={documents}
-        queryId={item.id}
-        onPauseItem={onPauseItem}
-        onDeleteItem={onDeleteItem}
-      />
-    ),
-    [documents, item.id, onPauseItem, onDeleteItem]
+  const rowProps = React.useMemo(
+    () => ({ documents, queryId, onPauseItem, onDeleteItem }),
+    [documents, queryId, onPauseItem, onDeleteItem]
   );
 
   return (
-    <Collapse in={isOpen} timeout={200} unmountOnExit>
+    <Collapse in={isOpen} timeout={200}>
       <Box sx={{ p: 1 }}>
         <Divider />
         <Box sx={{ px: 1, py: 1 }}>
@@ -154,11 +165,11 @@ export default function DocumentList({ item, isOpen, isLoading, onPauseItem, onD
             <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
               <CircularProgress size={24} thickness={3} />
             </Box>
-          ) : documents.length === 0 ? (
+          ) : documents.length === 0 && isOpen ? (
             <Typography variant="caption" sx={{ color: "text.secondary", ml: 4 }}>
-              {item.results === 0
+              {results === 0
                 ? "No documents found for this query."
-                : item.results > 0 && documents.length === 0
+                : results != null
                   ? "Getting document details..."
                   : "No document details available."}
             </Typography>
@@ -169,8 +180,8 @@ export default function DocumentList({ item, isOpen, isLoading, onPauseItem, onD
                 rowCount={documents.length}
                 rowHeight={ITEM_HEIGHT}
                 rowComponent={Row}
-                rowProps={{}}
-                style={{ width: "100%" }}
+                rowProps={rowProps}
+                style={{ width: "100%", overflowY: "hidden" }}
               />
             </Box>
           )}
@@ -179,3 +190,5 @@ export default function DocumentList({ item, isOpen, isLoading, onPauseItem, onD
     </Collapse>
   );
 }
+
+export default React.memo(DocumentList);

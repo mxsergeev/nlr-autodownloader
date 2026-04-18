@@ -130,6 +130,11 @@ export async function togglePause(id) {
   if (metadata.status === "paused") {
     // --- Resume ---
     const pausedItems = results.filter((r) => r.status === "paused");
+    const newStatus = pausedItems.length > 0 ? "downloading" : "pending";
+
+    // Write parent status first so background polls see the correct state immediately,
+    // even while the per-item DB writes and BullMQ job creation are still in progress.
+    await upsertMetadata({ id: Number(id) }, { ...metadata, status: newStatus });
 
     if (pausedItems.length > 0) {
       await Promise.all(
@@ -138,11 +143,12 @@ export async function togglePause(id) {
       await addDownloadJobBulk({ metadata, searchResults: pausedItems });
     }
 
-    const newStatus = pausedItems.length > 0 ? "downloading" : "pending";
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: newStatus });
     return { paused: false, id: Number(id), status: newStatus };
   } else {
     // --- Pause ---
+    // Write parent status first — same reason as resume above.
+    await upsertMetadata({ id: Number(id) }, { ...metadata, status: "paused" });
+
     const pendingItems = results.filter((r) => r.status === "pending");
 
     for (const item of pendingItems) {
@@ -156,7 +162,6 @@ export async function togglePause(id) {
       await updateSearchResult(item.id, { status: "paused" });
     }
 
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: "paused" });
     return { paused: true, id: Number(id), status: "paused" };
   }
 }
