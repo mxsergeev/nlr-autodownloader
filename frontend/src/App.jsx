@@ -22,7 +22,7 @@ export default function App() {
     queryKey: ['queue'],
     queryFn: fetchQueue,
     refetchInterval: (query) =>
-      query.state.data?.some((q) => ['pending', 'downloading'].includes(q.status)) ? 500 : 3000,
+      query.state.data?.some((q) => ['pending', 'downloading'].includes(q.status)) ? 1000 : 3000,
   })
 
   const mutation = useMutation({
