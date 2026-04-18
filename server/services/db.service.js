@@ -118,6 +118,7 @@ function normalize(metadata) {
     resultsPerPart: metadata.resultsPerPart ?? null,
     parts: metadata.parts ?? null,
     pageUrl: metadata.pageUrl ?? null,
+    searchUrl: metadata.searchUrl ?? null,
     createdAt: metadata.createdAt ? new Date(metadata.createdAt) : (metadata.createdAt ?? undefined),
     order: metadata.order !== undefined ? BigInt(metadata.order) : undefined,
     status: metadata.status ?? 'pending',

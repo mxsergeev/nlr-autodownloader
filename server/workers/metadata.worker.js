@@ -20,7 +20,9 @@ export const metadataWorker = new Worker(
 
     let metadata = await scrapMetadata({ url })
 
-    metadata = await upsertMetadata({ url }, metadata)
+    // Keep pageUrl as the stable user-supplied key; store the resolved (sorted) URL
+    // separately so search pagination builds correct page URLs without mutating the key.
+    metadata = await upsertMetadata({ url }, { ...metadata, pageUrl: url, searchUrl: metadata.pageUrl })
 
     if (metadata && metadata.results > 0) {
       await addSearchJob({ metadata })

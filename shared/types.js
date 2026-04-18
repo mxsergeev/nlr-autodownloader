@@ -7,6 +7,7 @@
  * @property {number|null} resultsPerPart
  * @property {number|null} parts
  * @property {number} downloaded
+ * @property {string|null} searchUrl
  * @property {string|null} downloadProgress
  * @property {Date|string|null} createdAt
  * @property {Date|string|null} lastAttempt

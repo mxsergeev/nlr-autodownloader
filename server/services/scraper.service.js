@@ -48,9 +48,11 @@ export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } =
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls)
     const results = []
+    const baseUrl = new URL(metadata.searchUrl || metadata.pageUrl)
 
     for (let curPart = 1; curPart <= (metadata.parts || 1); curPart++) {
-      await page.goto(metadata.pageUrl.replace(/offset=\d+/, `offset=${(curPart - 1) * metadata.resultsPerPart}`))
+      baseUrl.searchParams.set('offset', String((curPart - 1) * metadata.resultsPerPart))
+      await page.goto(baseUrl.toString())
       await page.waitForSelector('.item-title', { timeout: 15000 })
 
       const headings = page.locator('.item-title')
@@ -87,6 +89,8 @@ export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } =
  */
 export async function scrapDownload(item, storageDir) {
   return runJob(async (page) => {
+    await fs.mkdir(storageDir, { recursive: true })
+
     let page1 = null
     let page2 = null
     try {
@@ -97,8 +101,8 @@ export async function scrapDownload(item, storageDir) {
       await page1.getByRole('link', { name: 'Карточка' }).click()
       await page1.locator('#btn-download').click()
 
-      const page2Promise = page1.waitForEvent('popup', { timeout: 30000 }).catch(() => {})
-      const downloadPromise = page1.waitForEvent('download', { timeout: 30000 }).catch(() => {})
+      const page2Promise = page1.waitForEvent('popup', { timeout: 30000 }).catch(() => null)
+      const downloadPromise = page1.waitForEvent('download', { timeout: 30000 }).catch(() => null)
 
       await page1
         .getByLabel('Загрузка всего документа')
@@ -110,6 +114,10 @@ export async function scrapDownload(item, storageDir) {
 
       page2 = await page2Promise
       const file = await downloadPromise
+
+      if (!file) {
+        throw new Error('Download blocked: no download event received within timeout')
+      }
 
       const fileName = sanitizeFileName(item.fileName)
       const filePath = path.join(storageDir, `${fileName}.pdf`)

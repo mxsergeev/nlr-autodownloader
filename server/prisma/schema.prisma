@@ -19,6 +19,7 @@ enum QueryStatus {
 model Query {
   id               Int         @id @default(autoincrement())
   pageUrl          String      @unique
+  searchUrl        String?
   status           QueryStatus @default(pending)
   results          Int?
   resultsPerPart   Int?
