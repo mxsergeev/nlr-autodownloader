@@ -1,65 +1,65 @@
-import { Worker } from 'bullmq'
-import { connection } from '../queue.js'
-import { scrapSearchResults, verifySearchResults } from '../services/scraper.service.js'
-import { getSearchResults, saveSearchResults, upsertMetadata } from '../services/db.service.js'
-import { addDownloadJobBulk } from '../queues/download.queue.js'
+import { Worker } from "bullmq";
+import { connection } from "../queue.js";
+import { scrapSearchResults, verifySearchResults } from "../services/scraper.service.js";
+import { getSearchResults, saveSearchResults, upsertMetadata } from "../services/db.service.js";
+import { addDownloadJobBulk } from "../queues/download.queue.js";
 
 export const searchWorker = new Worker(
-  'searchQueue',
+  "searchQueue",
   async (job) => {
-    const { metadata } = job.data
+    const { metadata } = job.data;
 
-    await upsertMetadata({ id: metadata.id }, { status: 'fetching_results' })
+    await upsertMetadata({ id: metadata.id }, { status: "fetching_results" });
 
-    let results
+    let results;
 
-    const existing = await getSearchResults({ queryId: metadata.id })
+    const existing = await getSearchResults({ queryId: metadata.id });
 
     if (existing.length > 0 && verifySearchResults(existing, metadata)) {
       // Cache hit: existing DB results are valid — use them directly (already have IDs)
-      results = existing
+      results = existing;
     } else {
-      results = await scrapSearchResults(metadata)
+      results = await scrapSearchResults(metadata);
 
       if (verifySearchResults(results, metadata)) {
-        await saveSearchResults({ queryId: metadata.id }, results)
+        await saveSearchResults({ queryId: metadata.id }, results);
         // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
-        results = await getSearchResults({ queryId: metadata.id })
+        results = await getSearchResults({ queryId: metadata.id });
       } else {
-        throw new Error('Scraped search results do not match expected metadata')
+        throw new Error("Scraped search results do not match expected metadata");
       }
     }
 
-    await upsertMetadata({ id: metadata.id }, { status: 'downloading' })
+    await upsertMetadata({ id: metadata.id }, { status: "downloading" });
 
-    const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results })
+    const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results });
 
     if (!hasJobs) {
       // All files are already on disk — no download jobs to run, mark completed immediately
-      await upsertMetadata({ id: metadata.id }, { status: 'completed' })
+      await upsertMetadata({ id: metadata.id }, { status: "completed" });
     }
 
-    return { metadata, searchResults: results }
+    return { metadata, searchResults: results };
   },
-  { connection, concurrency: 1 },
-)
+  { connection, concurrency: 1 }
+);
 
-searchWorker.on('failed', async (job, err) => {
-  const { metadata } = job?.data || {}
+searchWorker.on("failed", async (job, err) => {
+  const { metadata } = job?.data || {};
 
   if (metadata && job && job.attemptsMade >= (job.opts?.attempts ?? 1)) {
     await upsertMetadata(
       { id: metadata.id },
       {
-        status: 'search_failed',
+        status: "search_failed",
         lastAttempt: new Date(),
-      },
-    ).catch(() => null)
+      }
+    ).catch(() => null);
   }
 
-  console.error(`[Search] Job ${job?.id} failed:`, err.message)
-})
+  console.error(`[Search] Job ${job?.id} failed:`, err.message);
+});
 
-searchWorker.on('completed', (job) => {
-  console.log(`[Search] Job ${job?.id} completed`)
-})
+searchWorker.on("completed", (job) => {
+  console.log(`[Search] Job ${job?.id} completed`);
+});

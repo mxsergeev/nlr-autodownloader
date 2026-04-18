@@ -1,5 +1,5 @@
-import { firefox } from 'playwright'
-import UserAgent from 'user-agents'
+import { firefox } from "playwright";
+import UserAgent from "user-agents";
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -8,46 +8,46 @@ const VIEWPORTS = [
   { width: 1536, height: 864 },
   { width: 1280, height: 800 },
   { width: 1600, height: 900 },
-]
+];
 
 // Weighted toward Moscow to match expected Russian user geography
 const TIMEZONES = [
-  'Europe/Moscow',
-  'Europe/Moscow',
-  'Europe/Moscow',
-  'Europe/Samara',
-  'Asia/Yekaterinburg',
-  'Europe/Kaliningrad',
-]
+  "Europe/Moscow",
+  "Europe/Moscow",
+  "Europe/Moscow",
+  "Europe/Samara",
+  "Asia/Yekaterinburg",
+  "Europe/Kaliningrad",
+];
 
-let browser
+let browser;
 
 async function startBrowser() {
-  if (browser && browser.isConnected()) return
+  if (browser && browser.isConnected()) return;
 
   if (browser) {
-    await stopBrowser()
+    await stopBrowser();
   }
 
-  let headless
+  let headless;
 
   if (process.env.PLAYWRIGHT_HEADLESS !== undefined) {
-    headless = process.env.PLAYWRIGHT_HEADLESS === 'true'
+    headless = process.env.PLAYWRIGHT_HEADLESS === "true";
   } else {
-    headless = true
+    headless = true;
   }
 
   // Firefox is much more consistent in headless mode than Chromium
   browser = await firefox.launch({
     headless,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
-  })
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
 }
 
 async function stopBrowser() {
-  if (!browser) return
-  await browser.close().catch(() => {})
-  browser = undefined
+  if (!browser) return;
+  await browser.close().catch(() => {});
+  browser = undefined;
 }
 
 /**
@@ -58,28 +58,28 @@ async function stopBrowser() {
  * @returns {Promise<T>}
  */
 export async function runJob(fn) {
-  if (!browser || !browser.isConnected()) await startBrowser()
+  if (!browser || !browser.isConnected()) await startBrowser();
 
-  let context
+  let context;
 
-  const userAgent = new UserAgent({ deviceCategory: 'desktop' })
-  const viewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)]
-  const timezoneId = TIMEZONES[Math.floor(Math.random() * TIMEZONES.length)]
-  const contextOptions = { userAgent: userAgent.toString(), viewport, timezoneId, locale: 'ru-RU' }
+  const userAgent = new UserAgent({ deviceCategory: "desktop" });
+  const viewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
+  const timezoneId = TIMEZONES[Math.floor(Math.random() * TIMEZONES.length)];
+  const contextOptions = { userAgent: userAgent.toString(), viewport, timezoneId, locale: "ru-RU" };
 
   try {
-    context = await browser.newContext(contextOptions)
+    context = await browser.newContext(contextOptions);
   } catch {
     // try restarting once
-    await stopBrowser()
-    await startBrowser()
-    context = await browser.newContext(contextOptions)
+    await stopBrowser();
+    await startBrowser();
+    context = await browser.newContext(contextOptions);
   }
 
-  const page = await context.newPage()
+  const page = await context.newPage();
   try {
-    return await fn(page, context)
+    return await fn(page, context);
   } finally {
-    await context.close().catch(() => {})
+    await context.close().catch(() => {});
   }
 }

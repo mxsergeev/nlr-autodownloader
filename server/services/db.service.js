@@ -1,6 +1,6 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from "@prisma/client";
 
-export const prisma = new PrismaClient()
+export const prisma = new PrismaClient();
 
 /**
  * Returns the Prisma Query record for the given params.
@@ -8,16 +8,22 @@ export const prisma = new PrismaClient()
  */
 export async function getMetadata({ id, url }) {
   if (id) {
-    const record = await prisma.query.findUnique({ where: { id: Number(id) }, include: { searchResults: true } })
-    return toSerializableQuery(record)
+    const record = await prisma.query.findUnique({
+      where: { id: Number(id) },
+      include: { searchResults: true },
+    });
+    return toSerializableQuery(record);
   }
 
   if (url) {
-    const record = await prisma.query.findUnique({ where: { pageUrl: url }, include: { searchResults: true } })
-    return toSerializableQuery(record)
+    const record = await prisma.query.findUnique({
+      where: { pageUrl: url },
+      include: { searchResults: true },
+    });
+    return toSerializableQuery(record);
   }
 
-  return null
+  return null;
 }
 
 /**
@@ -26,11 +32,11 @@ export async function getMetadata({ id, url }) {
  * @param {object} metadata  Prisma-compatible fields (results, resultsPerPart, parts, pageUrl, createdAt, order, status, lastAttempt, downloaded, downloadProgress)
  */
 export async function upsertMetadata({ id, url }, metadata) {
-  const data = normalize(metadata)
+  const data = normalize(metadata);
 
   if (id) {
-    const record = await prisma.query.update({ where: { id: Number(id) }, data })
-    return toSerializableQuery(record)
+    const record = await prisma.query.update({ where: { id: Number(id) }, data });
+    return toSerializableQuery(record);
   }
 
   if (url) {
@@ -39,19 +45,19 @@ export async function upsertMetadata({ id, url }, metadata) {
       where: { pageUrl: url },
       create: { pageUrl: url, ...data },
       update: data,
-    })
-    return toSerializableQuery(record)
+    });
+    return toSerializableQuery(record);
   }
 
-  throw new Error('Invalid params for upsertQuery: need id or url')
+  throw new Error("Invalid params for upsertQuery: need id or url");
 }
 
 /**
  * Returns all query records sorted by order ascending (no searchResults — slim for polling).
  */
 export async function getAllMetadata() {
-  const records = await prisma.query.findMany({ orderBy: { order: 'asc' } })
-  return records.map(toSerializableQuery)
+  const records = await prisma.query.findMany({ orderBy: { order: "asc" } });
+  return records.map(toSerializableQuery);
 }
 
 /**
@@ -62,15 +68,15 @@ export async function getMetadataById(id) {
   const record = await prisma.query.findUnique({
     where: { id: Number(id) },
     include: { searchResults: true },
-  })
-  return record ? toSerializableQuery(record) : null
+  });
+  return record ? toSerializableQuery(record) : null;
 }
 
 /**
  * Deletes the query record (and its search results via CASCADE).
  */
 export async function deleteMetadata({ id }) {
-  await prisma.query.delete({ where: { id } })
+  await prisma.query.delete({ where: { id } });
 }
 
 /**
@@ -79,11 +85,11 @@ export async function deleteMetadata({ id }) {
  * @param {{ queryId?: number, }} params  Lookup by queryId
  */
 export async function getSearchResults({ queryId } = {}) {
-  if (!queryId) return null
+  if (!queryId) return null;
 
-  const results = await prisma.searchResult.findMany({ where: { queryId: Number(queryId) } })
+  const results = await prisma.searchResult.findMany({ where: { queryId: Number(queryId) } });
 
-  return results
+  return results;
 }
 
 /**
@@ -95,7 +101,7 @@ export async function getSearchResults({ queryId } = {}) {
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
 export async function saveSearchResults({ queryId }, results) {
-  const hrefs = results.map((r) => r.href)
+  const hrefs = results.map((r) => r.href);
 
   await prisma.$transaction([
     // Remove items whose href is no longer in the scraped results
@@ -118,13 +124,13 @@ export async function saveSearchResults({ queryId }, results) {
           // href is the conflict key — cannot change
           // status is intentionally NOT updated here to preserve completed/paused/blocked states
         },
-      }),
+      })
     ),
-  ])
+  ]);
 }
 
 export async function updateSearchResult(id, data) {
-  await prisma.searchResult.update({ where: { id: Number(id) }, data })
+  await prisma.searchResult.update({ where: { id: Number(id) }, data });
 }
 
 /**
@@ -132,7 +138,7 @@ export async function updateSearchResult(id, data) {
  * @param {number} id
  */
 export async function deleteSearchResult(id) {
-  await prisma.searchResult.delete({ where: { id: Number(id) } })
+  await prisma.searchResult.delete({ where: { id: Number(id) } });
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +154,7 @@ export async function getQueryStats(id) {
   return prisma.query.findUnique({
     where: { id: Number(id) },
     select: { id: true, status: true, results: true },
-  })
+  });
 }
 
 /**
@@ -158,28 +164,31 @@ export async function getQueryStats(id) {
  * This prevents callers from accidentally resetting status or counters.
  */
 function normalize(metadata) {
-  const result = {}
+  const result = {};
 
-  if ('results' in metadata) result.results = metadata.results ?? null
-  if ('resultsPerPart' in metadata) result.resultsPerPart = metadata.resultsPerPart ?? null
-  if ('parts' in metadata) result.parts = metadata.parts ?? null
-  if ('pageUrl' in metadata) result.pageUrl = metadata.pageUrl ?? null
-  if ('searchUrl' in metadata) result.searchUrl = metadata.searchUrl ?? null
-  if ('createdAt' in metadata) result.createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null
-  if ('order' in metadata) result.order = metadata.order != null ? BigInt(metadata.order) : undefined
-  if ('status' in metadata) result.status = metadata.status
-  if ('lastAttempt' in metadata) result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null
-  if ('downloaded' in metadata) result.downloaded = metadata.downloaded ?? 0
-  if ('downloadProgress' in metadata) result.downloadProgress = metadata.downloadProgress ?? null
+  if ("results" in metadata) result.results = metadata.results ?? null;
+  if ("resultsPerPart" in metadata) result.resultsPerPart = metadata.resultsPerPart ?? null;
+  if ("parts" in metadata) result.parts = metadata.parts ?? null;
+  if ("pageUrl" in metadata) result.pageUrl = metadata.pageUrl ?? null;
+  if ("searchUrl" in metadata) result.searchUrl = metadata.searchUrl ?? null;
+  if ("createdAt" in metadata)
+    result.createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null;
+  if ("order" in metadata)
+    result.order = metadata.order != null ? BigInt(metadata.order) : undefined;
+  if ("status" in metadata) result.status = metadata.status;
+  if ("lastAttempt" in metadata)
+    result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null;
+  if ("downloaded" in metadata) result.downloaded = metadata.downloaded ?? 0;
+  if ("downloadProgress" in metadata) result.downloadProgress = metadata.downloadProgress ?? null;
 
-  return result
+  return result;
 }
 
 function toSerializableQuery(record) {
-  if (!record) return null
+  if (!record) return null;
 
   return {
     ...record,
-    order: typeof record.order === 'bigint' ? Number(record.order) : record.order,
-  }
+    order: typeof record.order === "bigint" ? Number(record.order) : record.order,
+  };
 }

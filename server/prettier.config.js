@@ -25,6 +25,6 @@ const config = {
   tabWidth: 2,
   useTabs: false,
   embeddedLanguageFormatting: "auto",
-}
+};
 
-export default config
+export default config;

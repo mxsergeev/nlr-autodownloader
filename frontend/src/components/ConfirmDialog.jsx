@@ -1,5 +1,5 @@
-import React from 'react'
-import PropTypes from 'prop-types'
+import React from "react";
+import PropTypes from "prop-types";
 import {
   Dialog,
   DialogTitle,
@@ -10,7 +10,7 @@ import {
   Box,
   Typography,
   CircularProgress,
-} from '@mui/material'
+} from "@mui/material";
 
 /**
  * Reusable confirmation dialog.
@@ -45,11 +45,11 @@ export default function ConfirmDialog({
 }) {
   const handleClose = (event, reason) => {
     // If the caller wants to prevent backdrop/escape closes, ignore those reasons
-    if (disableBackdropClick && (reason === 'backdropClick' || reason === 'escapeKeyDown')) {
-      return
+    if (disableBackdropClick && (reason === "backdropClick" || reason === "escapeKeyDown")) {
+      return;
     }
-    if (onClose) onClose(event, reason)
-  }
+    if (onClose) onClose(event, reason);
+  };
 
   return (
     <Dialog
@@ -87,7 +87,7 @@ export default function ConfirmDialog({
           disabled={loading}
           startIcon={
             loading ? (
-              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              <Box sx={{ display: "flex", alignItems: "center" }}>
                 <CircularProgress color="inherit" size={16} thickness={5} />
               </Box>
             ) : null
@@ -97,7 +97,7 @@ export default function ConfirmDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 ConfirmDialog.propTypes = {
@@ -113,19 +113,19 @@ ConfirmDialog.propTypes = {
   loading: PropTypes.bool,
   disableBackdropClick: PropTypes.bool,
   dialogProps: PropTypes.object,
-}
+};
 
 ConfirmDialog.defaultProps = {
   open: false,
-  title: 'Confirm',
+  title: "Confirm",
   content: null,
   children: null,
   itemLabel: null,
   onClose: null,
   onConfirm: null,
-  confirmText: 'Confirm',
-  cancelText: 'Cancel',
+  confirmText: "Confirm",
+  cancelText: "Cancel",
   loading: false,
   disableBackdropClick: false,
   dialogProps: {},
-}
+};

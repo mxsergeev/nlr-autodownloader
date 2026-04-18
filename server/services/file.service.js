@@ -1,14 +1,14 @@
-import { promises as fs } from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { promises as fs } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'data')
-await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 })
+const DATA_DIR = path.join(__dirname, "..", "..", "data");
+await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 });
 
-export const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads')
-await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 })
+export const DOWNLOADS_DIR = path.join(DATA_DIR, "downloads");
+await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 });
 
 /**
  * Returns a Set of base file names (without extension) already downloaded for the given query.
@@ -17,12 +17,12 @@ await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 })
  * @returns {Promise<Set<string>>}
  */
 export async function getDownloadedFileNames(metadata) {
-  const storageDir = path.join(DOWNLOADS_DIR, metadata.id.toString())
+  const storageDir = path.join(DOWNLOADS_DIR, metadata.id.toString());
   try {
-    return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name))
+    return new Set((await fs.readdir(storageDir)).map((file) => path.parse(file).name));
   } catch (err) {
-    if (err.code === 'ENOENT') return new Set()
-    throw err
+    if (err.code === "ENOENT") return new Set();
+    throw err;
   }
 }
 
@@ -33,7 +33,7 @@ export async function getDownloadedFileNames(metadata) {
  * @returns {{ missingFiles: import('../../shared/types.js').SearchResult[] }}
  */
 export function verifyDownloads(downloads = new Set(), searchResults) {
-  return { missingFiles: searchResults.filter((item) => !downloads.has(item.fileName)) }
+  return { missingFiles: searchResults.filter((item) => !downloads.has(item.fileName)) };
 }
 
 /**
@@ -42,21 +42,21 @@ export function verifyDownloads(downloads = new Set(), searchResults) {
  * @param {string} name
  * @returns {string}
  */
-export function sanitizeFileName(name = '') {
-  name = name.replace(/[/\\?%*:|"<>]/g, '_')
-  const lastDotIndex = name.lastIndexOf('.')
+export function sanitizeFileName(name = "") {
+  name = name.replace(/[/\\?%*:|"<>]/g, "_");
+  const lastDotIndex = name.lastIndexOf(".");
 
   if (lastDotIndex > 0) {
-    const base = name.substring(0, lastDotIndex).replace(/\./g, '')
-    const ext = name.substring(lastDotIndex + 1)
+    const base = name.substring(0, lastDotIndex).replace(/\./g, "");
+    const ext = name.substring(lastDotIndex + 1);
 
     if (/^[a-zA-Z]+$/.test(ext)) {
-      return base + '.' + ext
+      return base + "." + ext;
     } else {
-      return name.replace(/\./g, '')
+      return name.replace(/\./g, "");
     }
   } else {
-    return name.replace(/\./g, '')
+    return name.replace(/\./g, "");
   }
 }
 
@@ -67,9 +67,13 @@ export function sanitizeFileName(name = '') {
  * @returns {string}
  */
 export function queryToString(params) {
-  if (typeof params === 'number') return String(params)
-  if (params && params.id !== undefined && params.id !== null) return String(params.id)
-  const url = params && (params.url || params.pageUrl)
-  if (url) return url.toString().trim().replace(/[^a-zA-Z0-9]/g, '_')
-  return ''
+  if (typeof params === "number") return String(params);
+  if (params && params.id !== undefined && params.id !== null) return String(params.id);
+  const url = params && (params.url || params.pageUrl);
+  if (url)
+    return url
+      .toString()
+      .trim()
+      .replace(/[^a-zA-Z0-9]/g, "_");
+  return "";
 }

@@ -1,13 +1,13 @@
-import { searchQueue } from '../queue.js'
+import { searchQueue } from "../queue.js";
 
 export async function addSearchJob({ metadata }) {
   await searchQueue.add(
-    'search',
+    "search",
     { metadata },
     {
       jobId: `search-${metadata.id}`,
       attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-    },
-  )
+      backoff: { type: "exponential", delay: 5000 },
+    }
+  );
 }

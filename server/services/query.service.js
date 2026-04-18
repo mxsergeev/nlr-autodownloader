@@ -1,11 +1,17 @@
-import { promises as fs } from 'fs'
-import path from 'path'
-import { getMetadata, upsertMetadata, deleteMetadata, updateSearchResult, deleteSearchResult } from './db.service.js'
-import { DOWNLOADS_DIR, queryToString } from './file.service.js'
-import { searchQueue, downloadQueue } from '../queue.js'
-import { addMetadataJob } from '../queues/metadata.queue.js'
-import { addDownloadJobBulk } from '../queues/download.queue.js'
-import { RETRYABLE_STATUSES } from '../../shared/constants.js'
+import { promises as fs } from "fs";
+import path from "path";
+import {
+  getMetadata,
+  upsertMetadata,
+  deleteMetadata,
+  updateSearchResult,
+  deleteSearchResult,
+} from "./db.service.js";
+import { DOWNLOADS_DIR, queryToString } from "./file.service.js";
+import { searchQueue, downloadQueue } from "../queue.js";
+import { addMetadataJob } from "../queues/metadata.queue.js";
+import { addDownloadJobBulk } from "../queues/download.queue.js";
+import { RETRYABLE_STATUSES } from "../../shared/constants.js";
 
 /**
  * Creates or returns an existing Query record. Re-creates if the existing record has
@@ -15,9 +21,9 @@ import { RETRYABLE_STATUSES } from '../../shared/constants.js'
  * @returns {Promise<import('../../shared/types.js').Query>}
  */
 export async function queueQuery(params, { order = 0 } = {}) {
-  const existing = await getMetadata(params)
+  const existing = await getMetadata(params);
 
-  if (existing && existing.status !== 'search_failed') return existing
+  if (existing && existing.status !== "search_failed") return existing;
 
   return upsertMetadata(
     { url: params.url },
@@ -28,9 +34,9 @@ export async function queueQuery(params, { order = 0 } = {}) {
       pageUrl: params.url,
       createdAt: new Date(),
       order: Date.now() + order,
-      status: 'pending',
-    },
-  )
+      status: "pending",
+    }
+  );
 }
 
 /**
@@ -41,34 +47,34 @@ export async function queueQuery(params, { order = 0 } = {}) {
  * @param {{ removeDownloads?: boolean }} [options]
  */
 export async function removeQuery(params, { removeDownloads = true } = {}) {
-  const metadata = await getMetadata({ id: Number(params.id) })
+  const metadata = await getMetadata({ id: Number(params.id) });
 
-  if (!metadata) return
+  if (!metadata) return;
 
-  const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`)
+  const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`);
   try {
-    if (searchJob) await searchJob.remove()
+    if (searchJob) await searchJob.remove();
 
     if (metadata.searchResults?.length > 0) {
       const downloadJobs = (
         await Promise.allSettled(
-          metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`)),
+          metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`))
         )
       )
-        .filter((r) => r.status === 'fulfilled' && r.value)
-        .map((r) => r.value)
+        .filter((r) => r.status === "fulfilled" && r.value)
+        .map((r) => r.value);
 
-      await Promise.allSettled(downloadJobs.map((j) => j.remove()))
+      await Promise.allSettled(downloadJobs.map((j) => j.remove()));
     }
   } catch (err) {
-    console.error(`Error removing jobs for query ${metadata.id}:`, err)
+    console.error(`Error removing jobs for query ${metadata.id}:`, err);
   }
 
-  await deleteMetadata({ id: Number(params.id) })
+  await deleteMetadata({ id: Number(params.id) });
 
   if (removeDownloads) {
-    const dir = path.join(DOWNLOADS_DIR, queryToString(params))
-    await fs.rm(dir, { recursive: true, force: true })
+    const dir = path.join(DOWNLOADS_DIR, queryToString(params));
+    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -80,25 +86,25 @@ export async function removeQuery(params, { removeDownloads = true } = {}) {
  * @returns {Promise<void>}
  */
 export async function retryQuery(id) {
-  const metadata = await getMetadata({ id: Number(id) })
+  const metadata = await getMetadata({ id: Number(id) });
 
   if (!metadata) {
-    const err = new Error('Query not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Query not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
   if (!RETRYABLE_STATUSES.includes(metadata.status)) {
-    const err = new Error(`Cannot retry query with status '${metadata.status}'`)
-    err.code = 'NOT_RETRYABLE'
-    err.retryableStatuses = RETRYABLE_STATUSES
-    throw err
+    const err = new Error(`Cannot retry query with status '${metadata.status}'`);
+    err.code = "NOT_RETRYABLE";
+    err.retryableStatuses = RETRYABLE_STATUSES;
+    throw err;
   }
 
-  if (metadata.status === 'download_blocked') {
-    await addDownloadJobBulk({ metadata, searchResults: metadata.searchResults })
+  if (metadata.status === "download_blocked") {
+    await addDownloadJobBulk({ metadata, searchResults: metadata.searchResults });
   } else {
-    await addMetadataJob({ url: metadata.pageUrl })
+    await addMetadataJob({ url: metadata.pageUrl });
   }
 }
 
@@ -111,45 +117,47 @@ export async function retryQuery(id) {
  * @returns {Promise<{ paused: boolean, id: number, status: string }>}
  */
 export async function togglePause(id) {
-  const metadata = await getMetadata({ id: Number(id) })
+  const metadata = await getMetadata({ id: Number(id) });
 
   if (!metadata) {
-    const err = new Error('Query not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Query not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
-  const results = metadata.searchResults ?? []
+  const results = metadata.searchResults ?? [];
 
-  if (metadata.status === 'paused') {
+  if (metadata.status === "paused") {
     // --- Resume ---
-    const pausedItems = results.filter((r) => r.status === 'paused')
+    const pausedItems = results.filter((r) => r.status === "paused");
 
     if (pausedItems.length > 0) {
-      await Promise.all(pausedItems.map((item) => updateSearchResult(item.id, { status: 'pending' })))
-      await addDownloadJobBulk({ metadata, searchResults: pausedItems })
+      await Promise.all(
+        pausedItems.map((item) => updateSearchResult(item.id, { status: "pending" }))
+      );
+      await addDownloadJobBulk({ metadata, searchResults: pausedItems });
     }
 
-    const newStatus = pausedItems.length > 0 ? 'downloading' : 'pending'
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: newStatus })
-    return { paused: false, id: Number(id), status: newStatus }
+    const newStatus = pausedItems.length > 0 ? "downloading" : "pending";
+    await upsertMetadata({ id: Number(id) }, { ...metadata, status: newStatus });
+    return { paused: false, id: Number(id), status: newStatus };
   } else {
     // --- Pause ---
-    const pendingItems = results.filter((r) => r.status === 'pending')
+    const pendingItems = results.filter((r) => r.status === "pending");
 
     for (const item of pendingItems) {
-      const job = await downloadQueue.getJob(`download-${item.id}`)
+      const job = await downloadQueue.getJob(`download-${item.id}`);
       if (job) {
-        const state = await job.getState()
-        if (state === 'waiting' || state === 'delayed') {
-          await job.remove()
+        const state = await job.getState();
+        if (state === "waiting" || state === "delayed") {
+          await job.remove();
         }
       }
-      await updateSearchResult(item.id, { status: 'paused' })
+      await updateSearchResult(item.id, { status: "paused" });
     }
 
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: 'paused' })
-    return { paused: true, id: Number(id), status: 'paused' }
+    await upsertMetadata({ id: Number(id) }, { ...metadata, status: "paused" });
+    return { paused: true, id: Number(id), status: "paused" };
   }
 }
 
@@ -164,44 +172,44 @@ export async function togglePause(id) {
  * @returns {Promise<{ paused: boolean, id: number }>}
  */
 export async function toggleItemPause(queryId, itemId) {
-  const metadata = await getMetadata({ id: Number(queryId) })
+  const metadata = await getMetadata({ id: Number(queryId) });
 
   if (!metadata) {
-    const err = new Error('Query not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Query not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
-  const item = (metadata.searchResults ?? []).find((r) => r.id === Number(itemId))
+  const item = (metadata.searchResults ?? []).find((r) => r.id === Number(itemId));
 
   if (!item) {
-    const err = new Error('Item not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Item not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
-  if (!['pending', 'paused'].includes(item.status)) {
-    const err = new Error(`Cannot pause item with status '${item.status}'`)
-    err.code = 'NOT_PAUSABLE'
-    throw err
+  if (!["pending", "paused"].includes(item.status)) {
+    const err = new Error(`Cannot pause item with status '${item.status}'`);
+    err.code = "NOT_PAUSABLE";
+    throw err;
   }
 
-  if (item.status === 'paused') {
+  if (item.status === "paused") {
     // Resume
-    await updateSearchResult(Number(itemId), { status: 'pending' })
-    await addDownloadJobBulk({ metadata, searchResults: [item] })
-    return { paused: false, id: Number(itemId) }
+    await updateSearchResult(Number(itemId), { status: "pending" });
+    await addDownloadJobBulk({ metadata, searchResults: [item] });
+    return { paused: false, id: Number(itemId) };
   } else {
     // Pause
-    const job = await downloadQueue.getJob(`download-${itemId}`)
+    const job = await downloadQueue.getJob(`download-${itemId}`);
     if (job) {
-      const state = await job.getState()
-      if (state === 'waiting' || state === 'delayed') {
-        await job.remove()
+      const state = await job.getState();
+      if (state === "waiting" || state === "delayed") {
+        await job.remove();
       }
     }
-    await updateSearchResult(Number(itemId), { status: 'paused' })
-    return { paused: true, id: Number(itemId) }
+    await updateSearchResult(Number(itemId), { status: "paused" });
+    return { paused: true, id: Number(itemId) };
   }
 }
 
@@ -213,33 +221,33 @@ export async function toggleItemPause(queryId, itemId) {
  * @param {number} itemId
  */
 export async function removeItem(queryId, itemId) {
-  const metadata = await getMetadata({ id: Number(queryId) })
+  const metadata = await getMetadata({ id: Number(queryId) });
 
   if (!metadata) {
-    const err = new Error('Query not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Query not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
-  const item = (metadata.searchResults ?? []).find((r) => r.id === Number(itemId))
+  const item = (metadata.searchResults ?? []).find((r) => r.id === Number(itemId));
 
   if (!item) {
-    const err = new Error('Item not found')
-    err.code = 'NOT_FOUND'
-    throw err
+    const err = new Error("Item not found");
+    err.code = "NOT_FOUND";
+    throw err;
   }
 
-  const job = await downloadQueue.getJob(`download-${itemId}`)
+  const job = await downloadQueue.getJob(`download-${itemId}`);
   if (job) {
-    const state = await job.getState()
-    if (state === 'waiting' || state === 'delayed') {
-      await job.remove()
+    const state = await job.getState();
+    if (state === "waiting" || state === "delayed") {
+      await job.remove();
     }
   }
 
-  await deleteSearchResult(Number(itemId))
+  await deleteSearchResult(Number(itemId));
 
   if (metadata.results != null && metadata.results > 0) {
-    await upsertMetadata({ id: Number(queryId) }, { ...metadata, results: metadata.results - 1 })
+    await upsertMetadata({ id: Number(queryId) }, { ...metadata, results: metadata.results - 1 });
   }
 }
