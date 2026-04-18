@@ -83,3 +83,10 @@ export async function runJob(fn) {
     await context.close().catch(() => {});
   }
 }
+
+async function gracefulShutdown() {
+  await stopBrowser();
+}
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);

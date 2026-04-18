@@ -1,13 +1,22 @@
 import { Worker } from "bullmq";
 import { connection } from "../queue.js";
-import { scrapSearchResults, verifySearchResults } from "../services/scraper.service.js";
-import { getSearchResults, saveSearchResults, upsertMetadata } from "../services/db.service.js";
+import { scrapeSearchResults, verifySearchResults } from "../services/scraper.service.js";
+import {
+  getQueryStats,
+  getSearchResults,
+  saveSearchResults,
+  upsertMetadata,
+} from "../services/db.service.js";
 import { addDownloadJobBulk } from "../queues/download.queue.js";
 
 export const searchWorker = new Worker(
   "searchQueue",
   async (job) => {
     const { metadata } = job.data;
+
+    // Guard: exit cleanly if the query was deleted while this job was queued.
+    const current = await getQueryStats(metadata.id);
+    if (!current) return;
 
     await upsertMetadata({ id: metadata.id }, { status: "fetching_results" });
 
@@ -19,12 +28,19 @@ export const searchWorker = new Worker(
       // Cache hit: existing DB results are valid — use them directly (already have IDs)
       results = existing;
     } else {
-      results = await scrapSearchResults(metadata);
+      results = await scrapeSearchResults(metadata);
 
       if (verifySearchResults(results, metadata)) {
-        await saveSearchResults({ queryId: metadata.id }, results);
-        // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
-        results = await getSearchResults({ queryId: metadata.id });
+        try {
+          await saveSearchResults({ queryId: metadata.id }, results);
+          // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
+          results = await getSearchResults({ queryId: metadata.id });
+        } catch (err) {
+          // Query was deleted mid-Playwright scrape (FK violation P2003 or record-not-found P2025).
+          // Exit cleanly — no retry needed.
+          if (err.code === "P2003" || err.code === "P2025") return;
+          throw err;
+        }
       } else {
         throw new Error("Scraped search results do not match expected metadata");
       }

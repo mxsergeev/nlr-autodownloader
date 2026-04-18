@@ -52,22 +52,27 @@ export async function removeQuery(params, { removeDownloads = true } = {}) {
   if (!metadata) return;
 
   const searchJob = await searchQueue.getJob(`search-${metadata.id.toString()}`);
-  try {
-    if (searchJob) await searchJob.remove();
-
-    if (metadata.searchResults?.length > 0) {
-      const downloadJobs = (
-        await Promise.allSettled(
-          metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`))
-        )
-      )
-        .filter((r) => r.status === "fulfilled" && r.value)
-        .map((r) => r.value);
-
-      await Promise.allSettled(downloadJobs.map((j) => j.remove()));
+  if (searchJob) {
+    const state = await searchJob.getState();
+    // Active (locked) jobs cannot be removed — the worker will fail cleanly
+    // when it tries to write to the now-deleted DB record.
+    if (state !== "active") {
+      await searchJob
+        .remove()
+        .catch((err) => console.error(`Error removing search job for query ${metadata.id}:`, err));
     }
-  } catch (err) {
-    console.error(`Error removing jobs for query ${metadata.id}:`, err);
+  }
+
+  if (metadata.searchResults?.length > 0) {
+    const downloadJobs = (
+      await Promise.allSettled(
+        metadata.searchResults.map((j) => downloadQueue.getJob(`download-${j.id.toString()}`))
+      )
+    )
+      .filter((r) => r.status === "fulfilled" && r.value)
+      .map((r) => r.value);
+
+    await Promise.allSettled(downloadJobs.map((j) => j.remove()));
   }
 
   await deleteMetadata({ id: Number(params.id) });
@@ -134,7 +139,7 @@ export async function togglePause(id) {
 
     // Write parent status first so background polls see the correct state immediately,
     // even while the per-item DB writes and BullMQ job creation are still in progress.
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: newStatus });
+    await upsertMetadata({ id: Number(id) }, { status: newStatus });
 
     if (pausedItems.length > 0) {
       await Promise.all(
@@ -147,20 +152,23 @@ export async function togglePause(id) {
   } else {
     // --- Pause ---
     // Write parent status first — same reason as resume above.
-    await upsertMetadata({ id: Number(id) }, { ...metadata, status: "paused" });
+    await upsertMetadata({ id: Number(id) }, { status: "paused" });
 
     const pendingItems = results.filter((r) => r.status === "pending");
 
-    for (const item of pendingItems) {
-      const job = await downloadQueue.getJob(`download-${item.id}`);
-      if (job) {
-        const state = await job.getState();
-        if (state === "waiting" || state === "delayed") {
-          await job.remove();
+    // Parallelize job cancellation + status updates across all pending items.
+    await Promise.all(
+      pendingItems.map(async (item) => {
+        const job = await downloadQueue.getJob(`download-${item.id}`);
+        if (job) {
+          const state = await job.getState();
+          if (state === "waiting" || state === "delayed") {
+            await job.remove();
+          }
         }
-      }
-      await updateSearchResult(item.id, { status: "paused" });
-    }
+        await updateSearchResult(item.id, { status: "paused" });
+      })
+    );
 
     return { paused: true, id: Number(id), status: "paused" };
   }
@@ -259,6 +267,13 @@ export async function removeItem(queryId, itemId) {
   }
 
   if (metadata.results != null && metadata.results > 0) {
-    await upsertMetadata({ id: Number(queryId) }, { ...metadata, results: metadata.results - 1 });
+    const wasDownloaded = item.status === "completed" && metadata.downloaded > 0;
+    await upsertMetadata(
+      { id: Number(queryId) },
+      {
+        results: metadata.results - 1,
+        downloaded: wasDownloaded ? metadata.downloaded - 1 : metadata.downloaded,
+      }
+    );
   }
 }

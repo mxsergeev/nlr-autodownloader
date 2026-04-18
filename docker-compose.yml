@@ -9,8 +9,6 @@ services:
       - .env
     ports:
       - "${SERVER_PORT:-3333}:3333"
-      # Prisma studio port:
-      - 5555:5555
     volumes:
       - ./server/:/app
       - ./shared/:/app/shared

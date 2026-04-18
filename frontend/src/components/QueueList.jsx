@@ -65,13 +65,10 @@ export default function QueueList({ queue }) {
     [pauseItemMutate]
   );
 
-  const requestDeleteItem = React.useCallback(
-    (queryId, itemId, label) => {
-      setSelectedDocItem({ queryId, itemId, label: label ?? `Item #${itemId}` });
-      setItemDialogOpen(true);
-    },
-    []
-  );
+  const requestDeleteItem = React.useCallback((queryId, itemId, label) => {
+    setSelectedDocItem({ queryId, itemId, label: label ?? `Item #${itemId}` });
+    setItemDialogOpen(true);
+  }, []);
 
   const confirmDeleteItem = React.useCallback(() => {
     if (!selectedDocItem) return;
@@ -95,6 +92,10 @@ export default function QueueList({ queue }) {
       },
     });
   }, [selectedItem, deleteMutate]);
+
+  const pausingItemId = pauseItemMutation.isPending
+    ? (pauseItemMutation.variables?.itemId ?? null)
+    : null;
 
   if (!queue || queue.length === 0) {
     return (
@@ -143,6 +144,7 @@ export default function QueueList({ queue }) {
             isDeleting={deleteMutation.isPending && selectedItem?.id === item.id}
             isRetrying={retryMutation.isPending && selectedItem?.id === item.id}
             isPausing={pauseMutation.isPending && selectedItem?.id === item.id}
+            pausingItemId={pausingItemId}
             onRequestDelete={requestDelete}
             onRetry={requestRetry}
             onPause={requestPause}

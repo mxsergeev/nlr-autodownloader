@@ -94,43 +94,74 @@ export async function getSearchResults({ queryId } = {}) {
 
 /**
  * Upserts search results for a query, keyed on (queryId, href).
+ * - Results no longer present in the new list are deleted.
  * - New results are inserted with status 'pending'.
  * - Existing results (matching href) have their title and fileName updated; status is preserved.
- * - Results no longer present in the new list are deleted.
+ * Uses an interactive transaction for atomicity: pre-filters existing hrefs in the same
+ * transaction to avoid conflicts, then inserts only genuinely new rows.
  * @param {{ queryId: number }} params
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
 export async function saveSearchResults({ queryId }, results) {
   const hrefs = results.map((r) => r.href);
 
-  await prisma.$transaction([
-    // Remove items whose href is no longer in the scraped results
-    prisma.searchResult.deleteMany({
+  // Interactive transaction: delete removed items, then insert only new ones.
+  // We pre-filter existing hrefs manually because $transaction array mode does not
+  // support createMany({ skipDuplicates }) for SQLite in Prisma 6.
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.searchResult.findMany({
+      where: { queryId: Number(queryId), href: { in: hrefs } },
+      select: { href: true },
+    });
+    const existingHrefs = new Set(existing.map((r) => r.href));
+    const newResults = results.filter((r) => !existingHrefs.has(r.href));
+
+    await tx.searchResult.deleteMany({
       where: { queryId: Number(queryId), href: { notIn: hrefs } },
-    }),
-    // Upsert each result: insert new rows with status 'pending'; update title/fileName on conflict
-    ...results.map((r) =>
-      prisma.searchResult.upsert({
-        where: { queryId_href: { queryId: Number(queryId), href: r.href } },
-        create: {
+    });
+
+    if (newResults.length > 0) {
+      await tx.searchResult.createMany({
+        data: newResults.map((r) => ({
           title: r.title,
           href: r.href,
           fileName: r.fileName,
           queryId: Number(queryId),
-        },
-        update: {
-          title: r.title,
-          fileName: r.fileName,
-          // href is the conflict key — cannot change
-          // status is intentionally NOT updated here to preserve completed/paused/blocked states
-        },
+        })),
+      });
+    }
+  });
+
+  // Update title/fileName for records that already existed (status is intentionally preserved).
+  // This is done outside the transaction to avoid N individual statements inside it.
+  await Promise.all(
+    results.map((r) =>
+      prisma.searchResult.updateMany({
+        where: { queryId: Number(queryId), href: r.href },
+        data: { title: r.title, fileName: r.fileName },
       })
-    ),
-  ]);
+    )
+  );
 }
 
 export async function updateSearchResult(id, data) {
   await prisma.searchResult.update({ where: { id: Number(id) }, data });
+}
+
+/**
+ * Atomically increments Query.downloaded by 1 and updates lastAttempt.
+ * Returns the updated record fields needed for status computation.
+ * Using an atomic DB increment avoids race conditions when multiple download
+ * workers complete simultaneously.
+ * @param {number} id
+ * @returns {Promise<{ id: number, status: string, results: number|null, downloaded: number }>}
+ */
+export async function incrementDownloaded(id) {
+  return prisma.query.update({
+    where: { id: Number(id) },
+    data: { downloaded: { increment: 1 }, lastAttempt: new Date() },
+    select: { id: true, status: true, results: true, downloaded: true },
+  });
 }
 
 /**

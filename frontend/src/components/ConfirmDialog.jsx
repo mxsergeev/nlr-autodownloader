@@ -30,17 +30,17 @@ import {
  * - dialogProps: object - forwarded to the Dialog component
  */
 export default function ConfirmDialog({
-  open,
-  title,
-  content,
-  children,
-  itemLabel,
-  onClose,
-  onConfirm,
-  confirmText,
-  cancelText,
-  loading,
-  disableBackdropClick,
+  open = false,
+  title = "Confirm",
+  content = null,
+  children = null,
+  itemLabel = null,
+  onClose = null,
+  onConfirm = null,
+  confirmText = "Confirm",
+  cancelText = "Cancel",
+  loading = false,
+  disableBackdropClick = false,
   dialogProps = {},
 }) {
   const handleClose = (event, reason) => {
@@ -113,19 +113,4 @@ ConfirmDialog.propTypes = {
   loading: PropTypes.bool,
   disableBackdropClick: PropTypes.bool,
   dialogProps: PropTypes.object,
-};
-
-ConfirmDialog.defaultProps = {
-  open: false,
-  title: "Confirm",
-  content: null,
-  children: null,
-  itemLabel: null,
-  onClose: null,
-  onConfirm: null,
-  confirmText: "Confirm",
-  cancelText: "Cancel",
-  loading: false,
-  disableBackdropClick: false,
-  dialogProps: {},
 };

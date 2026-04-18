@@ -7,6 +7,7 @@ import {
   CardContent,
   CircularProgress,
   Divider,
+  Drawer,
   IconButton,
   LinearProgress,
   Tooltip,
@@ -21,6 +22,7 @@ import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import { RETRYABLE_STATUSES } from "@shared/constants.js";
@@ -114,6 +116,7 @@ const ExpandButton = styled(IconButton, {
  *   isDeleting: boolean,
  *   isRetrying: boolean,
  *   isPausing: boolean,
+ *   pausingItemId: number | null,
  *   onRequestDelete: (item: object) => void,
  *   onRetry: (item: object) => void,
  *   onPause: (id: number) => void,
@@ -127,24 +130,29 @@ export default React.memo(function QueueItem({
   isDeleting,
   isRetrying,
   isPausing,
+  pausingItemId,
   onRequestDelete,
   onRetry,
   onPause,
   onPauseItem,
   onDeleteItem,
 }) {
-  const [expanded, setExpanded] = React.useState(false);
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [copiedUrl, setCopiedUrl] = React.useState(false);
   const [isZipping, setIsZipping] = React.useState(false);
   const [downloadError, setDownloadError] = React.useState(null);
 
-  // Fetch full card data (with searchResults) eagerly on mount so it's already in cache
-  // when the user expands the card. Background polling only activates when expanded.
+  // Derive status early — needed by useQuery's enabled option below.
+  const status = (item.status ?? "").toLowerCase();
+
+  // Eagerly fetch detail for active items (data changes frequently) so it's ready when the
+  // Drawer opens. For terminal-state items, fetch on-demand when the Drawer is opened (P1).
+  // Background polling activates only while the Drawer is open to keep document statuses fresh.
   const { data: detail, isLoading: isDetailLoading } = useQuery({
     queryKey: ["queue-item", item.id],
     queryFn: () => fetchQueueItem(item.id),
-    enabled: !!item.id && !item.isPending,
-    refetchInterval: expanded ? 2000 : false,
+    enabled: (ACTIVE_STATUSES.includes(status) || drawerOpen) && !!item.id && !item.isPending,
+    refetchInterval: drawerOpen ? 2000 : false,
     staleTime: 1000,
   });
 
@@ -155,7 +163,6 @@ export default React.memo(function QueueItem({
   const created = formatTimestamp(item.createdAt);
   const searchResults = detail?.searchResults;
   const resultsCount = searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
-  const status = (item.status ?? "").toLowerCase();
 
   const isPaused = status === "paused";
   const canPause = ["pending", "downloading"].includes(status) || isPaused;
@@ -200,7 +207,7 @@ export default React.memo(function QueueItem({
   const handleCopyUrl = (e) => {
     e.stopPropagation();
     if (!item?.pageUrl) return;
-    navigator.clipboard.writeText(item.pageUrl);
+    navigator.clipboard.writeText(item.pageUrl).catch(() => {});
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 1500);
   };
@@ -252,7 +259,7 @@ export default React.memo(function QueueItem({
       }}
     >
       <CardContent
-        onClick={() => setExpanded((s) => !s)}
+        onClick={() => setDrawerOpen((s) => !s)}
         sx={{
           p: "12px 16px !important",
           cursor: "pointer",
@@ -377,13 +384,13 @@ export default React.memo(function QueueItem({
             )}
 
             <ExpandButton
-              aria-expanded={expanded}
-              aria-label={expanded ? "Collapse item" : "Expand item"}
-              expand={expanded ? 1 : 0}
+              aria-expanded={drawerOpen}
+              aria-label={drawerOpen ? "Close documents" : "View documents"}
+              expand={drawerOpen}
               size="small"
               onClick={(e) => {
                 e.stopPropagation();
-                setExpanded((s) => !s);
+                setDrawerOpen((s) => !s);
               }}
             >
               <ExpandMoreIcon sx={{ fontSize: 18 }} />
@@ -482,15 +489,161 @@ export default React.memo(function QueueItem({
           )}
       </CardContent>
 
-      <DocumentList
-        queryId={item.id}
-        results={item.results}
-        searchResults={searchResults}
-        isOpen={expanded}
-        isLoading={isDetailLoading && !detail}
-        onPauseItem={onPauseItem}
-        onDeleteItem={onDeleteItem}
-      />
+      <Drawer
+        anchor="right"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        PaperProps={{
+          sx: { width: { xs: "100vw", sm: 520 }, display: "flex", flexDirection: "column" },
+        }}
+      >
+        <Box
+          sx={{
+            px: 2,
+            pt: 1.5,
+            pb: 1,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            flexShrink: 0,
+          }}
+        >
+          {/* Row 1: icon + label + copy + close */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mb: 0.75 }}>
+            {ACTIVE_STATUSES.includes(status) ? (
+              <CircularProgress
+                size={13}
+                thickness={4}
+                sx={{ flexShrink: 0, color: "text.secondary" }}
+              />
+            ) : (
+              <LinkRoundedIcon sx={{ fontSize: 13, color: "text.secondary", flexShrink: 0 }} />
+            )}
+            <Typography
+              variant="subtitle1"
+              sx={{
+                flex: 1,
+                fontWeight: 600,
+                fontSize: "0.9rem",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </Typography>
+            {item.pageUrl && (
+              <Tooltip title={copiedUrl ? "Copied!" : "Copy URL"}>
+                <IconButton
+                  size="small"
+                  sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
+                  onClick={handleCopyUrl}
+                >
+                  <ContentCopyRoundedIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+              </Tooltip>
+            )}
+            <IconButton
+              size="small"
+              onClick={() => setDrawerOpen(false)}
+              aria-label="Close documents"
+            >
+              <CloseRoundedIcon fontSize="small" />
+            </IconButton>
+          </Box>
+
+          {/* Row 2: status chip + action buttons */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <StatusChip status={item.status} />
+
+            {canPause && (
+              <Tooltip title={isPaused ? "Resume" : "Pause"}>
+                <IconButton
+                  size="small"
+                  aria-label={isPaused ? "Resume item" : "Pause item"}
+                  color={isPaused ? "warning" : "default"}
+                  onClick={handlePause}
+                  disabled={isActing}
+                >
+                  {isPaused ? (
+                    <PlayArrowRoundedIcon sx={{ fontSize: 18 }} />
+                  ) : (
+                    <PauseRoundedIcon sx={{ fontSize: 18 }} />
+                  )}
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {canRetry && (
+              <Tooltip title="Retry">
+                <IconButton
+                  size="small"
+                  aria-label="Retry item"
+                  color="primary"
+                  onClick={handleRetry}
+                  disabled={isActing}
+                >
+                  <ReplayRoundedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            <Tooltip title="Delete">
+              <IconButton
+                size="small"
+                aria-label="Delete item"
+                color="error"
+                onClick={handleDelete}
+                disabled={isActing}
+              >
+                <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+
+            {downloadedCount > 0 && (
+              <Tooltip
+                title={
+                  downloadError
+                    ? `Download error: ${downloadError}`
+                    : isZipping
+                      ? "Preparing ZIP…"
+                      : isDownloading
+                        ? "Download in progress — pause or wait for completion"
+                        : isPaused && totalCount > 0
+                          ? `Download partial files (${downloadedCount} of ${totalCount})`
+                          : "Download files"
+                }
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label="Download files"
+                    color={downloadError ? "error" : "primary"}
+                    onClick={handleDownload}
+                    disabled={isActing || isZipping || isDownloading}
+                  >
+                    {isZipping ? (
+                      <CircularProgress size={18} />
+                    ) : (
+                      <DownloadRoundedIcon sx={{ fontSize: 18 }} />
+                    )}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+          </Box>
+        </Box>
+        <Box sx={{ flex: 1, overflow: "hidden" }}>
+          <DocumentList
+            queryId={item.id}
+            results={item.results}
+            searchResults={searchResults}
+            isLoading={isDetailLoading && !detail}
+            onPauseItem={onPauseItem}
+            onDeleteItem={onDeleteItem}
+            pausingItemId={pausingItemId}
+          />
+        </Box>
+      </Drawer>
     </Card>
   );
 });

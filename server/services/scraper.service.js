@@ -11,7 +11,7 @@ const DOWNLOAD_START_JITTER_MS = parseInt(process.env.DOWNLOAD_START_JITTER_MS |
  * @param {{ url: string }} params
  * @returns {Promise<{ results: number, resultsPerPart: number, parts: number, pageUrl: string }>}
  */
-export async function scrapMetadata({ url } = {}) {
+export async function scrapeMetadata({ url } = {}) {
   return runJob(async (page) => {
     await page.goto(url);
 
@@ -51,7 +51,7 @@ export async function scrapMetadata({ url } = {}) {
  * @param {{ scrapedUrls?: Set<string> }} [options]
  * @returns {Promise<{ title: string, href: string, fileName: string }[]>}
  */
-export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } = {}) {
+export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } = {}) {
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls);
     const results = [];
@@ -99,7 +99,7 @@ export async function scrapSearchResults(metadata, { scrapedUrls = new Set() } =
  * @param {{ href: string, fileName: string }} item
  * @param {string} storageDir  Absolute path to the directory where the PDF will be saved.
  */
-export async function scrapDownload(item, storageDir) {
+export async function scrapeDownload(item, storageDir) {
   return runJob(async (page) => {
     await fs.mkdir(storageDir, { recursive: true });
 
@@ -111,9 +111,10 @@ export async function scrapDownload(item, storageDir) {
     let page2 = null;
     try {
       await page.goto(item.href);
-      const page1Promise = page.waitForEvent("popup").catch(() => {});
+      const page1Promise = page.waitForEvent("popup", { timeout: 15000 }).catch(() => null);
       await page.getByLabel("Электронная копия").click();
       page1 = await page1Promise;
+      if (!page1) throw new Error("Download blocked: detail page popup did not open");
       await page1.getByRole("link", { name: "Карточка" }).click();
       await page1.locator("#btn-download").click();
 

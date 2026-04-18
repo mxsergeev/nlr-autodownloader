@@ -65,24 +65,6 @@ export default function App() {
     [queue]
   );
 
-  React.useEffect(() => {
-    setPendingJobs((prev) => {
-      let changed = false;
-      const next = {};
-
-      for (const [url, state] of Object.entries(prev)) {
-        if (queueUrls.has(url)) {
-          changed = true;
-          continue;
-        }
-
-        next[url] = state;
-      }
-
-      return changed ? next : prev;
-    });
-  }, [queueUrls]);
-
   const displayQueue = React.useMemo(() => {
     const pending = Object.entries(pendingJobs).map(([url, state]) => ({
       id: `pending-${url}`,
@@ -177,12 +159,6 @@ export default function App() {
       <Container maxWidth="md">
         <Box sx={{ py: 4 }}>
           <AddQueryForm onSubmitUrl={handleAddUrl} isSubmitting={mutation.isPending} />
-
-          <Fade in={mutation.isError} unmountOnExit>
-            <Alert severity="error" sx={{ mb: 2 }}>
-              Failed to add URL: {mutation.error?.message}
-            </Alert>
-          </Fade>
 
           <Fade in={mutation.isSuccess} unmountOnExit>
             <Alert severity="success" sx={{ mb: 2 }}>
