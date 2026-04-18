@@ -29,3 +29,7 @@ export const pauseItem = (queryId, itemId) =>
 /** @returns {Promise<{ removed: number }>} */
 export const deleteItem = (queryId, itemId) =>
   axios.delete(`/api/queue/${queryId}/items/${itemId}`).then((r) => r.data);
+
+/** @returns {Promise<Blob>} */
+export const downloadQuery = (id) =>
+  axios.get(`/api/queue/${id}/download`, { responseType: "blob" }).then((r) => r.data);

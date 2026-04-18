@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import archiver from "archiver";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,4 +77,18 @@ export function queryToString(params) {
       .trim()
       .replace(/[^a-zA-Z0-9]/g, "_");
   return "";
+}
+
+/**
+ * Creates and returns an archiver zip stream for all files in the query's download directory.
+ * The caller is responsible for piping the stream to a response.
+ * @param {number} queryId
+ * @returns {import('archiver').Archiver}
+ */
+export function createZipStream(queryId) {
+  const archive = archiver("zip", { zlib: { level: 0 } });
+  const storageDir = path.join(DOWNLOADS_DIR, queryId.toString());
+  archive.directory(storageDir, false);
+  archive.finalize();
+  return archive;
 }

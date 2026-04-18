@@ -21,8 +21,10 @@ import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import { RETRYABLE_STATUSES } from "@shared/constants.js";
-import { fetchQueueItem } from "../api/queue.api.js";
+import { fetchQueueItem, downloadQuery } from "../api/queue.api.js";
 import StatusChip from "./StatusChip";
 import DocumentList from "./DocumentList";
 
@@ -132,6 +134,9 @@ export default React.memo(function QueueItem({
   onDeleteItem,
 }) {
   const [expanded, setExpanded] = React.useState(false);
+  const [copiedUrl, setCopiedUrl] = React.useState(false);
+  const [isZipping, setIsZipping] = React.useState(false);
+  const [downloadError, setDownloadError] = React.useState(null);
 
   // Fetch full card data (with searchResults) eagerly on mount so it's already in cache
   // when the user expands the card. Background polling only activates when expanded.
@@ -149,8 +154,7 @@ export default React.memo(function QueueItem({
   const label = item.pageUrl ? extractQueryLabel(item.pageUrl) : `Query #${item.id ?? index + 1}`;
   const created = formatTimestamp(item.createdAt);
   const searchResults = detail?.searchResults;
-  const resultsCount =
-    searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
+  const resultsCount = searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
   const status = (item.status ?? "").toLowerCase();
 
   const isPaused = status === "paused";
@@ -191,6 +195,48 @@ export default React.memo(function QueueItem({
     e.stopPropagation();
     if (!item?.id) return;
     onPause?.(item.id);
+  };
+
+  const handleCopyUrl = (e) => {
+    e.stopPropagation();
+    if (!item?.pageUrl) return;
+    navigator.clipboard.writeText(item.pageUrl);
+    setCopiedUrl(true);
+    setTimeout(() => setCopiedUrl(false), 1500);
+  };
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    if (!item?.id || isZipping) return;
+    setIsZipping(true);
+    setDownloadError(null);
+    try {
+      const blob = await downloadQuery(item.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${label.replace(/[/\\:*?"<>|]/g, "_")}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      let message = "Failed to prepare download";
+      if (err?.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          message = json.error || message;
+        } catch {
+          // ignore parse error
+        }
+      } else {
+        message = err?.response?.data?.error || err?.message || message;
+      }
+      setDownloadError(message);
+    } finally {
+      setIsZipping(false);
+    }
   };
 
   return (
@@ -240,6 +286,17 @@ export default React.memo(function QueueItem({
                 {label}
               </Typography>
             </Tooltip>
+            {item.pageUrl && (
+              <Tooltip title={copiedUrl ? "Copied!" : "Copy URL"}>
+                <IconButton
+                  size="small"
+                  sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
+                  onClick={handleCopyUrl}
+                >
+                  <ContentCopyRoundedIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+              </Tooltip>
+            )}
           </Box>
 
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -289,6 +346,36 @@ export default React.memo(function QueueItem({
               </IconButton>
             </Tooltip>
 
+            {downloadedCount > 0 && (
+              <Tooltip
+                title={
+                  isZipping
+                    ? "Preparing ZIP…"
+                    : status === "downloading"
+                      ? "Download in progress — pause or wait for completion"
+                      : isPaused && totalCount > 0
+                        ? `Download partial files (${downloadedCount} of ${totalCount})`
+                        : "Download files"
+                }
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label="Download files"
+                    color="primary"
+                    onClick={handleDownload}
+                    disabled={isActing || isZipping || status === "downloading"}
+                  >
+                    {isZipping ? (
+                      <CircularProgress size={18} />
+                    ) : (
+                      <DownloadRoundedIcon sx={{ fontSize: 18 }} />
+                    )}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+
             <ExpandButton
               aria-expanded={expanded}
               aria-label={expanded ? "Collapse item" : "Expand item"}
@@ -315,6 +402,19 @@ export default React.memo(function QueueItem({
         {status === "download_blocked" && (
           <Alert severity="warning" sx={{ mb: 1, fontSize: "0.85rem" }}>
             Some downloads were blocked by the archive. Retry to attempt missing files.
+          </Alert>
+        )}
+
+        {downloadError && (
+          <Alert
+            severity="error"
+            sx={{ mb: 1, fontSize: "0.85rem" }}
+            onClose={(e) => {
+              e.stopPropagation();
+              setDownloadError(null);
+            }}
+          >
+            {downloadError}
           </Alert>
         )}
 

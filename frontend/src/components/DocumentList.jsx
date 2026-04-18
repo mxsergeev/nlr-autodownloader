@@ -12,6 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import DescriptionRoundedIcon from "@mui/icons-material/DescriptionRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
@@ -23,6 +24,15 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
   const doc = documents[index];
   const isPaused = doc.status === "paused";
   const canPause = ["pending", "paused"].includes(doc.status);
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopyUrl = (e) => {
+    e.stopPropagation();
+    if (!doc.href) return;
+    navigator.clipboard.writeText(doc.href);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   return (
     <Box style={style} sx={{ px: 1, py: 0.5, boxSizing: "border-box" }}>
@@ -70,39 +80,35 @@ function DocumentRow({ index, style, documents, queryId, onPauseItem, onDeleteIt
         }
       >
         <ListItemText
+          sx={{ overflow: "hidden", minWidth: 0 }}
           primary={
-            <Typography
-              variant="body2"
-              sx={{
-                fontWeight: 500,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                maxWidth: "calc(100% - 180px)",
-                fontSize: "0.85rem",
-              }}
-            >
-              {doc.fileName ?? doc.title ?? doc.href ?? "Untitled"}
-            </Typography>
-          }
-          secondary={
-            doc.href ? (
-              <Tooltip title={doc.href}>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: "text.secondary",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    maxWidth: "100%",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  {doc.href}
-                </Typography>
-              </Tooltip>
-            ) : null
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, overflow: "hidden" }}>
+              {doc.href && (
+                <Tooltip title={copied ? "Copied!" : "Copy URL"}>
+                  <IconButton
+                    size="small"
+                    sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
+                    onClick={handleCopyUrl}
+                  >
+                    <ContentCopyRoundedIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 500,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontSize: "0.85rem",
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {doc.fileName ?? doc.title ?? doc.href ?? "Untitled"}
+              </Typography>
+            </Box>
           }
         />
       </ListItem>
@@ -136,7 +142,15 @@ function Row({ index, style, documents, queryId, onPauseItem, onDeleteItem }) {
  *   onDeleteItem: (queryId: number, itemId: number) => void,
  * }} props
  */
-function DocumentList({ queryId, results, searchResults, isOpen, isLoading, onPauseItem, onDeleteItem }) {
+function DocumentList({
+  queryId,
+  results,
+  searchResults,
+  isOpen,
+  isLoading,
+  onPauseItem,
+  onDeleteItem,
+}) {
   const documents = React.useMemo(
     () => (Array.isArray(searchResults) ? searchResults : []),
     [searchResults]

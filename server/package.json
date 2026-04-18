@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
+    "archiver": "^7.0.1",
     "bullmq": "^5.70.1",
     "express": "^5.2.1",
     "playwright": "^1.58.0",

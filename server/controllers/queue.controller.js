@@ -9,6 +9,7 @@ import {
   toggleItemPause,
   removeItem,
 } from "../services/query.service.js";
+import { createZipStream } from "../services/file.service.js";
 
 const router = express.Router();
 
@@ -126,6 +127,35 @@ router.delete("/queue/:id/items/:itemId", async (req, res) => {
     if (error.code === "NOT_FOUND") return res.status(404).json({ error: error.message });
     console.error("Item removal error:", error);
     res.status(500).json({ error: "Failed to remove item", message: error.message });
+  }
+});
+
+router.get("/queue/:id/download", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const item = await getMetadataById(Number(id));
+    if (!item) return res.status(404).json({ error: "Query not found" });
+    if (item.status === "downloading") {
+      return res
+        .status(409)
+        .json({ error: "Download in progress. Pause or wait for it to complete." });
+    }
+    if (!item.downloaded || item.downloaded === 0) {
+      return res.status(404).json({ error: "No files have been downloaded yet." });
+    }
+
+    const zipStream = createZipStream(item.id);
+    res.setHeader("Content-Disposition", `attachment; filename="query-${id}.zip"`);
+    res.setHeader("Content-Type", "application/zip");
+    zipStream.on("error", (err) => {
+      console.error("ZIP creation error:", err);
+    });
+    zipStream.pipe(res);
+  } catch (error) {
+    console.error("Download error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to prepare download", message: error.message });
+    }
   }
 });
 
