@@ -34,6 +34,7 @@ model Query {
   lastAttempt      DateTime?
   downloaded       Int         @default(0)
   downloadProgress String?
+  warnings         String?
 
   searchResults SearchResult[]
 }

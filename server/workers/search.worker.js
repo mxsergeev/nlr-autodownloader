@@ -1,6 +1,10 @@
 import { Worker } from "bullmq";
 import { connection } from "../queue.js";
-import { scrapeSearchResults, verifySearchResults } from "../services/scraper.service.js";
+import {
+  scrapeSearchResults,
+  verifySearchResults,
+  deduplicateResults,
+} from "../services/scraper.service.js";
 import {
   getQueryStats,
   getSearchResults,
@@ -12,7 +16,8 @@ import { addDownloadJobBulk } from "../queues/download.queue.js";
 export const searchWorker = new Worker(
   "searchQueue",
   async (job) => {
-    const { metadata } = job.data;
+    const { metadata: jobMetadata } = job.data;
+    let metadata = jobMetadata;
 
     // Guard: exit cleanly if the query was deleted while this job was queued.
     const current = await getQueryStats(metadata.id);
@@ -21,32 +26,58 @@ export const searchWorker = new Worker(
     await upsertMetadata({ id: metadata.id }, { status: "fetching_results" });
 
     let results;
+    let searchWarnings = [];
 
     const existing = await getSearchResults({ queryId: metadata.id });
 
-    if (existing.length > 0 && verifySearchResults(existing, metadata)) {
-      // Cache hit: existing DB results are valid — use them directly (already have IDs)
+    const existingCheck =
+      existing.length > 0 ? verifySearchResults(existing, metadata) : { ok: false, warnings: [] };
+    if (existingCheck.ok && existingCheck.warnings.length === 0) {
+      // Cache hit: existing DB results match exactly — use them directly (already have IDs)
       results = existing;
     } else {
       results = await scrapeSearchResults(metadata);
 
-      if (verifySearchResults(results, metadata)) {
-        try {
-          await saveSearchResults({ queryId: metadata.id }, results);
-          // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
-          results = await getSearchResults({ queryId: metadata.id });
-        } catch (err) {
-          // Query was deleted mid-Playwright scrape (FK violation P2003 or record-not-found P2025).
-          // Exit cleanly — no retry needed.
-          if (err.code === "P2003" || err.code === "P2025") return;
-          throw err;
-        }
-      } else {
-        throw new Error("Scraped search results do not match expected metadata");
+      const { ok, warnings } = verifySearchResults(results, metadata);
+      searchWarnings = warnings;
+
+      if (warnings.length > 0) {
+        warnings.forEach((w) => console.warn(`[Search] ${job.id}: ${w}`));
+      }
+
+      if (!ok) {
+        throw new Error(`Search verification failed: ${warnings.join("; ")}`);
+      }
+
+      // Deduplicate if needed
+      results = deduplicateResults(results);
+
+      // Update metadata.results to match actual scraped count
+      if (results.length !== metadata.results) {
+        await upsertMetadata({ id: metadata.id }, { results: results.length });
+        metadata = { ...metadata, results: results.length };
+      }
+
+      try {
+        await saveSearchResults({ queryId: metadata.id }, results);
+        // Re-fetch after upsert to get DB-assigned IDs for any newly inserted rows
+        results = await getSearchResults({ queryId: metadata.id });
+      } catch (err) {
+        // Query was deleted mid-Playwright scrape (FK violation P2003 or record-not-found P2025).
+        // Exit cleanly — no retry needed.
+        if (err.code === "P2003" || err.code === "P2025") return;
+        throw err;
       }
     }
 
-    await upsertMetadata({ id: metadata.id }, { status: "download_queued" });
+    // Persist warnings (or clear old ones) so the UI can display them
+    await upsertMetadata(
+      { id: metadata.id },
+      {
+        status: "download_queued",
+        warnings: searchWarnings.length > 0 ? searchWarnings.join("\n") : null,
+      }
+    );
 
     const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results });
 

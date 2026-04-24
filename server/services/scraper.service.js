@@ -154,12 +154,28 @@ export async function scrapeDownload(item, storageDir) {
  * @param {import('../../shared/types.js').Query} metadata
  * @returns {boolean}
  */
+/**
+ * Verifies scraped search results against expected metadata.
+ * Returns an object with `ok` (whether to proceed) and `warnings` (diagnostic messages).
+ * - Count mismatch: ok=true (proceed with what we have), warning logged
+ * - Duplicates: ok=true (caller should deduplicate), warning logged
+ * - Zero results: ok=false (genuine failure)
+ * @param {Array} results
+ * @param {{ results: number, id: number }} metadata
+ * @returns {{ ok: boolean, warnings: string[] }}
+ */
 export function verifySearchResults(results, metadata) {
+  const warnings = [];
+
+  if (results.length === 0) {
+    warnings.push(`Expected ${metadata.results} results, but got 0.`);
+    return { ok: false, warnings };
+  }
+
   if (results.length !== metadata.results) {
-    console.warn(
-      `[${metadata.id}] Warning: Expected ${metadata.results} results, but got ${results.length}.`
+    warnings.push(
+      `Expected ${metadata.results} results, but got ${results.length}. Proceeding with ${results.length}.`
     );
-    return false;
   }
 
   const seenUrls = new Set();
@@ -174,11 +190,22 @@ export function verifySearchResults(results, metadata) {
   }
 
   if (duplicates.length > 0) {
-    console.warn(
-      `[${metadata.id}] Warning: Found ${duplicates.length} duplicate items in the results.`
-    );
-    return false;
+    warnings.push(`Found ${duplicates.length} duplicate URL(s) — they will be deduplicated.`);
   }
 
-  return true;
+  return { ok: true, warnings };
+}
+
+/**
+ * Removes duplicate entries by href, keeping the first occurrence.
+ * @param {Array<{ href: string }>} results
+ * @returns {Array}
+ */
+export function deduplicateResults(results) {
+  const seen = new Set();
+  return results.filter((item) => {
+    if (seen.has(item.href)) return false;
+    seen.add(item.href);
+    return true;
+  });
 }

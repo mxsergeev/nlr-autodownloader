@@ -211,6 +211,7 @@ function normalize(metadata) {
     result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null;
   if ("downloaded" in metadata) result.downloaded = metadata.downloaded ?? 0;
   if ("downloadProgress" in metadata) result.downloadProgress = metadata.downloadProgress ?? null;
+  if ("warnings" in metadata) result.warnings = metadata.warnings ?? null;
 
   return result;
 }

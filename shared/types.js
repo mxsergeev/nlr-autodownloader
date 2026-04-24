@@ -2,13 +2,14 @@
  * @typedef {Object} Query
  * @property {number} id
  * @property {string} pageUrl
- * @property {'pending'|'fetching_metadata'|'fetching_results'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'} status
+ * @property {'pending'|'fetching_metadata'|'fetching_results'|'download_queued'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'} status
  * @property {number|null} results
  * @property {number|null} resultsPerPart
  * @property {number|null} parts
  * @property {number} downloaded
  * @property {string|null} searchUrl
  * @property {string|null} downloadProgress
+ * @property {string|null} warnings
  * @property {Date|string|null} createdAt
  * @property {Date|string|null} lastAttempt
  * @property {number} order

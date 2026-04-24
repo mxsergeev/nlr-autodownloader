@@ -420,6 +420,12 @@ export default React.memo(function QueueItem({
           </Alert>
         )}
 
+        {item.warnings && (
+          <Alert severity="info" sx={{ mb: 1, fontSize: "0.85rem", whiteSpace: "pre-line" }}>
+            {item.warnings}
+          </Alert>
+        )}
+
         {downloadError && (
           <Alert
             severity="error"
