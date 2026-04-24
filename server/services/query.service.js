@@ -135,7 +135,11 @@ export async function togglePause(id) {
   if (metadata.status === "paused") {
     // --- Resume ---
     const pausedItems = results.filter((r) => r.status === "paused");
-    const newStatus = pausedItems.length > 0 ? "downloading" : "pending";
+    // Items that are still "pending" were saved by the search worker but never queued
+    // (e.g. query was paused during fetching_results before downloads were enqueued).
+    const pendingItems = results.filter((r) => r.status === "pending");
+    const itemsToQueue = [...pausedItems, ...pendingItems];
+    const newStatus = itemsToQueue.length > 0 ? "download_queued" : "pending";
 
     // Write parent status first so background polls see the correct state immediately,
     // even while the per-item DB writes and BullMQ job creation are still in progress.
@@ -145,7 +149,10 @@ export async function togglePause(id) {
       await Promise.all(
         pausedItems.map((item) => updateSearchResult(item.id, { status: "pending" }))
       );
-      await addDownloadJobBulk({ metadata, searchResults: pausedItems });
+    }
+
+    if (itemsToQueue.length > 0) {
+      await addDownloadJobBulk({ metadata, searchResults: itemsToQueue });
     }
 
     return { paused: false, id: Number(id), status: newStatus };
@@ -159,13 +166,22 @@ export async function togglePause(id) {
     // Parallelize job cancellation + status updates across all pending items.
     await Promise.all(
       pendingItems.map(async (item) => {
-        const job = await downloadQueue.getJob(`download-${item.id}`);
-        if (job) {
-          const state = await job.getState();
-          if (state === "waiting" || state === "delayed") {
-            await job.remove();
-          }
-        }
+        // Remove the original job and any retry jobs (download-{id}-r2 … -r10)
+        const jobIds = [`download-${item.id}`];
+        for (let r = 2; r <= 10; r++) jobIds.push(`download-${item.id}-r${r}`);
+
+        await Promise.all(
+          jobIds.map(async (jid) => {
+            const job = await downloadQueue.getJob(jid);
+            if (job) {
+              const state = await job.getState();
+              if (state === "waiting" || state === "delayed") {
+                await job.remove();
+              }
+            }
+          })
+        );
+
         await updateSearchResult(item.id, { status: "paused" });
       })
     );

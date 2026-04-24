@@ -173,7 +173,8 @@ export default React.memo(function QueueItem({
   const resultsCount = searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
 
   const isPaused = status === "paused";
-  const canPause = ["pending", "download_queued", "downloading"].includes(status) || isPaused;
+  const canPause =
+    ["pending", "fetching_results", "download_queued", "downloading"].includes(status) || isPaused;
   const canRetry = RETRYABLE_STATUSES.includes(status);
   const isActing = isDeleting || isRetrying || isPausing || item.isPending;
 

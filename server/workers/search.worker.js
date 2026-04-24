@@ -70,6 +70,19 @@ export const searchWorker = new Worker(
       }
     }
 
+    // Check if the user paused this query while we were scraping
+    const freshState = await getQueryStats(metadata.id);
+    if (freshState?.status === "paused") {
+      // Save warnings but keep status as paused — downloads will queue on resume
+      if (searchWarnings.length > 0) {
+        await upsertMetadata({ id: metadata.id }, { warnings: searchWarnings.join("\n") });
+      }
+      console.log(
+        `[Search] Job ${job.id}: query ${metadata.id} was paused during scrape, skipping downloads`
+      );
+      return { metadata, searchResults: results };
+    }
+
     // Persist warnings (or clear old ones) so the UI can display them
     await upsertMetadata(
       { id: metadata.id },
