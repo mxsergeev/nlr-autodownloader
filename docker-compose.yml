@@ -15,7 +15,7 @@ services:
       - ./shared/:/shared
       - /app/node_modules
       - .env:/.env:ro
-      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads
+      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
       - queries_data:/data/queries
     restart: unless-stopped
     command: /bin/sh -c 'npx prisma generate && npx prisma db push && if [ "$NODE_ENV" = "development" ]; then npm run db:studio & STUDIO_PID=$!; npm run dev; kill $STUDIO_PID 2>/dev/null; else npm start; fi'
