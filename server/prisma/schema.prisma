@@ -11,6 +11,7 @@ enum QueryStatus {
   pending
   fetching_metadata
   fetching_results
+  download_queued
   downloading
   completed
   download_blocked

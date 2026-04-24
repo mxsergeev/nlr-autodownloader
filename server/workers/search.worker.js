@@ -46,7 +46,7 @@ export const searchWorker = new Worker(
       }
     }
 
-    await upsertMetadata({ id: metadata.id }, { status: "downloading" });
+    await upsertMetadata({ id: metadata.id }, { status: "download_queued" });
 
     const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results });
 

@@ -1,6 +1,8 @@
 import { firefox } from "playwright";
 import UserAgent from "user-agents";
 
+const MAX_BROWSER_CONTEXTS = parseInt(process.env.MAX_BROWSER_CONTEXTS || "3", 10);
+
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
   { width: 1440, height: 900 },
@@ -19,6 +21,27 @@ const TIMEZONES = [
   "Asia/Yekaterinburg",
   "Europe/Kaliningrad",
 ];
+
+// Simple semaphore to limit concurrent browser contexts across all workers
+let activeContexts = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  if (activeContexts < MAX_BROWSER_CONTEXTS) {
+    activeContexts++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waitQueue.push(resolve));
+}
+
+function releaseSlot() {
+  if (waitQueue.length > 0) {
+    const next = waitQueue.shift();
+    next();
+  } else {
+    activeContexts--;
+  }
+}
 
 let browser;
 
@@ -53,34 +76,47 @@ async function stopBrowser() {
 /**
  * Runs a Playwright job in a fresh browser context with a random desktop user agent.
  * Restarts the browser automatically if it has disconnected.
+ * Respects a global concurrency limit (MAX_BROWSER_CONTEXTS) to avoid overloading
+ * low-resource hardware.
  * @template T
  * @param {(page: import('playwright').Page, context: import('playwright').BrowserContext) => Promise<T>} fn
  * @returns {Promise<T>}
  */
 export async function runJob(fn) {
-  if (!browser || !browser.isConnected()) await startBrowser();
-
-  let context;
-
-  const userAgent = new UserAgent({ deviceCategory: "desktop" });
-  const viewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
-  const timezoneId = TIMEZONES[Math.floor(Math.random() * TIMEZONES.length)];
-  const contextOptions = { userAgent: userAgent.toString(), viewport, timezoneId, locale: "ru-RU" };
+  await acquireSlot();
 
   try {
-    context = await browser.newContext(contextOptions);
-  } catch {
-    // try restarting once
-    await stopBrowser();
-    await startBrowser();
-    context = await browser.newContext(contextOptions);
-  }
+    if (!browser || !browser.isConnected()) await startBrowser();
 
-  const page = await context.newPage();
-  try {
-    return await fn(page, context);
+    let context;
+
+    const userAgent = new UserAgent({ deviceCategory: "desktop" });
+    const viewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
+    const timezoneId = TIMEZONES[Math.floor(Math.random() * TIMEZONES.length)];
+    const contextOptions = {
+      userAgent: userAgent.toString(),
+      viewport,
+      timezoneId,
+      locale: "ru-RU",
+    };
+
+    try {
+      context = await browser.newContext(contextOptions);
+    } catch {
+      // try restarting once
+      await stopBrowser();
+      await startBrowser();
+      context = await browser.newContext(contextOptions);
+    }
+
+    const page = await context.newPage();
+    try {
+      return await fn(page, context);
+    } finally {
+      await context.close().catch(() => {});
+    }
   } finally {
-    await context.close().catch(() => {});
+    releaseSlot();
   }
 }
 

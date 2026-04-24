@@ -27,6 +27,7 @@ import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import { RETRYABLE_STATUSES } from "@shared/constants.js";
 import { fetchQueueItem, downloadQuery } from "../api/queue.api.js";
+import { copyToClipboard } from "../utils/clipboard.js";
 import StatusChip from "./StatusChip";
 import DocumentList from "./DocumentList";
 
@@ -36,7 +37,14 @@ function formatTimestamp(value) {
   return Number.isNaN(date.getTime()) ? "N/A" : date.toLocaleString();
 }
 
-const ACTIVE_STATUSES = ["pending", "fetching_metadata", "fetching_results", "downloading"];
+const ACTIVE_STATUSES = [
+  "pending",
+  "fetching_metadata",
+  "fetching_results",
+  "download_queued",
+  "downloading",
+];
+const SPINNER_STATUSES = ["fetching_metadata", "fetching_results", "downloading"];
 
 function extractQueryLabel(url) {
   try {
@@ -165,7 +173,7 @@ export default React.memo(function QueueItem({
   const resultsCount = searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
 
   const isPaused = status === "paused";
-  const canPause = ["pending", "downloading"].includes(status) || isPaused;
+  const canPause = ["pending", "download_queued", "downloading"].includes(status) || isPaused;
   const canRetry = RETRYABLE_STATUSES.includes(status);
   const isActing = isDeleting || isRetrying || isPausing || item.isPending;
 
@@ -207,7 +215,7 @@ export default React.memo(function QueueItem({
   const handleCopyUrl = (e) => {
     e.stopPropagation();
     if (!item?.pageUrl) return;
-    navigator.clipboard.writeText(item.pageUrl).catch(() => {});
+    copyToClipboard(item.pageUrl).catch(() => {});
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 1500);
   };
@@ -263,17 +271,17 @@ export default React.memo(function QueueItem({
         sx={{
           p: "12px 16px !important",
           cursor: "pointer",
-          opacity: status === "pending" ? 0.7 : 1,
+          opacity: 1,
           backgroundColor: status === "search_failed" ? "rgba(211, 47, 47, 0.08)" : "transparent",
         }}
       >
         {/* Top row: URL label + status chip + action buttons + expand */}
         <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5, mb: 1 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flex: 1, minWidth: 0 }}>
-            {ACTIVE_STATUSES.includes(status) && (
+            {SPINNER_STATUSES.includes(status) && (
               <CircularProgress size={14} thickness={4} sx={{ flexShrink: 0 }} />
             )}
-            {!ACTIVE_STATUSES.includes(status) && (
+            {!SPINNER_STATUSES.includes(status) && (
               <LinkRoundedIcon
                 sx={{ fontSize: 14, color: "text.secondary", flexShrink: 0, mt: "1px" }}
               />
@@ -509,7 +517,7 @@ export default React.memo(function QueueItem({
         >
           {/* Row 1: icon + label + copy + close */}
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mb: 0.75 }}>
-            {ACTIVE_STATUSES.includes(status) ? (
+            {SPINNER_STATUSES.includes(status) ? (
               <CircularProgress
                 size={13}
                 thickness={4}
@@ -532,7 +540,7 @@ export default React.memo(function QueueItem({
               {label}
             </Typography>
             {item.pageUrl && (
-              <Tooltip title={copiedUrl ? "Copied!" : "Copy URL"}>
+              <Tooltip title={copiedUrl ? "Copied!" : "Copy query URL"}>
                 <IconButton
                   size="small"
                   sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
@@ -629,6 +637,19 @@ export default React.memo(function QueueItem({
                   </IconButton>
                 </span>
               </Tooltip>
+            )}
+
+            <MetaItem
+              icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />}
+              label="Created:"
+              value={created}
+            />
+            {isFailed && lastAttempt && (
+              <MetaItem
+                icon={<ScheduleRoundedIcon sx={{ fontSize: 13 }} />}
+                label="Last attempt:"
+                value={lastAttempt}
+              />
             )}
           </Box>
         </Box>

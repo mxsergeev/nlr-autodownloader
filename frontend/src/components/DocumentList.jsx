@@ -17,6 +17,7 @@ import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import { downloadItem } from "../api/queue.api.js";
+import { copyToClipboard } from "../utils/clipboard.js";
 import StatusChip from "./StatusChip";
 
 const ITEM_HEIGHT = 60;
@@ -42,7 +43,7 @@ function DocumentRow({
   const handleCopyUrl = (e) => {
     e.stopPropagation();
     if (!doc.href) return;
-    navigator.clipboard.writeText(doc.href).catch(() => {});
+    copyToClipboard(doc.href).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -162,20 +163,22 @@ function DocumentRow({
                   </IconButton>
                 </Tooltip>
               )}
-              <Typography
-                variant="body2"
-                sx={{
-                  fontWeight: 500,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontSize: "0.85rem",
-                  flex: 1,
-                  minWidth: 0,
-                }}
-              >
-                {docLabel}
-              </Typography>
+              <Tooltip title={docLabel} placement="bottom-start">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontSize: "0.85rem",
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  {index + 1}. {docLabel}
+                </Typography>
+              </Tooltip>
             </Box>
           }
         />
