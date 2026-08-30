@@ -8,14 +8,17 @@ services:
     env_file:
       - .env
     environment:
-      # SERVER_PORT and REDIS_PORT are host-facing values in .env. The
-      # application always listens on the service ports inside the network.
+      # SERVER_PORT is host-facing in .env; the application always listens on
+      # the fixed service port inside the Compose network.
       SERVER_PORT: "3333"
+      # Docker exposes the host port below; the process must listen on the
+      # container interface so the host mapping can reach it.
+      SERVER_HOST: "0.0.0.0"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       DOWNLOADS_DIR: /data/downloads
     ports:
-      - "${SERVER_PORT:-3333}:3333"
+      - "127.0.0.1:${SERVER_PORT:-3333}:3333"
     volumes:
       - ./server/:/app
       - ./shared/:/app/shared
@@ -51,8 +54,6 @@ services:
   redis:
     image: redis:8.6.1-alpine
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     environment:

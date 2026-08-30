@@ -233,12 +233,12 @@ export async function togglePause(id) {
       },
     });
 
-    // A claimed download is stale after this point. Converting it to paused
-    // makes resume deterministic and prevents a stale active worker leaving a
-    // permanently downloading item behind.
+    // A claimed download is stale after this point. Return active work to
+    // pending so resume can recreate it, while leaving pending and manually
+    // paused children untouched.
     await tx.searchResult.updateMany({
-      where: { queryId, status: { in: ["pending", "downloading"] } },
-      data: { status: "paused" },
+      where: { queryId, status: "downloading" },
+      data: { status: "pending" },
     });
 
     return { generation: nextGeneration };
@@ -274,10 +274,6 @@ async function resumeQuery(queryId) {
     let shouldQueueDownloads = false;
 
     if (["download_queued", "downloading"].includes(previousStatus)) {
-      await tx.searchResult.updateMany({
-        where: { queryId, status: "paused" },
-        data: { status: "pending" },
-      });
       nextStatus = "download_queued";
       shouldQueueDownloads = true;
     } else if (previousStatus === "download_blocked") {
@@ -398,7 +394,19 @@ export async function removeItem(queryId, itemId) {
   }
 
   await cancelDownloadJobs(resultId);
-  await deleteSearchResultAndReconcile(resultId, { invalidateGeneration: true });
+  const reconciled = await deleteSearchResultAndReconcile(resultId, { invalidateGeneration: true });
+
+  // Deleting one item invalidates every old-generation download job. Remove
+  // the surviving queued jobs and recreate only pending work under the new
+  // generation; active workers become harmless stale work via their guard.
+  await cancelQueryDownloadJobs(id);
+  const pendingSurvivors =
+    reconciled?.status === "download_queued"
+      ? (await getMetadata({ id }))?.searchResults?.some((result) => result.status === "pending")
+      : false;
+  if (pendingSurvivors) {
+    await addDownloadJobBulk({ queryId: id, generation: Number(reconciled.generation) });
+  }
 
   try {
     await deleteDownloadedFile(id, item.id);

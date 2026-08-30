@@ -11,4 +11,8 @@ describe("runtime configuration", () => {
     expect(config.redis).toMatchObject({ host: "127.0.0.1", port: 6379, db: 0 });
     expect(config.concurrentDownloads).toBeGreaterThan(0);
   });
+
+  it("defaults standalone HTTP listening to localhost", () => {
+    expect(config.serverHost).toBe("127.0.0.1");
+  });
 });

@@ -309,12 +309,19 @@ async function cleanOrphanQueryDirectories(
 ) {
   const entries = await readDirectory(downloadsDir);
   const liveQueryIds = new Set([...queryById.keys()].map(String));
-  const tempName = path.relative(downloadsDir, tempDownloadsDir);
+  const downloadsRoot = path.resolve(downloadsDir);
+  const tempRoot = path.resolve(tempDownloadsDir);
 
   for (const entry of entries) {
-    if (entry.name === tempName) continue;
-    if (entry.isDirectory() && liveQueryIds.has(entry.name)) continue;
-    await fs.rm(path.join(downloadsDir, entry.name), { recursive: true, force: true });
+    // DOWNLOADS_DIR may be a user-provided folder such as ~/Downloads. Only
+    // remove directories matching the app's numeric query-directory shape;
+    // unrelated files, folders, and symlinks are user data and stay intact.
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+
+    const entryPath = path.resolve(downloadsRoot, entry.name);
+    if (entryPath === tempRoot || liveQueryIds.has(entry.name)) continue;
+
+    await fs.rm(entryPath, { recursive: true, force: true });
   }
 }
 

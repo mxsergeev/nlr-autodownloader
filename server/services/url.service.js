@@ -114,16 +114,24 @@ export function validateVivaldiDetailsUrl(value, { label = "Vivaldi details URL"
  * is provided, the part must belong to that exact document.
  *
  * @param {unknown} value
- * @param {{ label?: string, documentId?: string|number }} [options]
+ * @param {{ label?: string, documentId?: string|number, part?: string|number }} [options]
  * @returns {URL}
  */
-export function validateVivaldiPartUrl(value, { label = "Vivaldi part URL", documentId } = {}) {
+export function validateVivaldiPartUrl(
+  value,
+  { label = "Vivaldi part URL", documentId, part = 0 } = {}
+) {
   const parsed = parseVivaldiUrl(value, label);
   const match = parsed.pathname.match(/^\/pm(\d+)\/partfile$/);
+  const expectedPart = String(part);
+  const actualPart = parsed.searchParams.get("part");
   if (
     !match ||
     (documentId != null && match[1] !== String(documentId)) ||
-    parsed.search !== "?part=0" ||
+    !/^\d+$/.test(actualPart ?? "") ||
+    !/^\d+$/.test(expectedPart) ||
+    parsed.searchParams.size !== 1 ||
+    actualPart !== expectedPart ||
     parsed.hash
   ) {
     throw new UrlValidationError(`${label} must be an exact Vivaldi part URL`);

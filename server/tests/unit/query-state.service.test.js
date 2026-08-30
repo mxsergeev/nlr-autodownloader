@@ -59,6 +59,22 @@ describe("query state reconciliation", () => {
     });
   });
 
+  it("does not leave the parent downloading when its last active child is paused", async () => {
+    const query = await createQuery();
+    const [first, second] = await getItems(query.id);
+
+    await setSearchResultStatus(first.id, "completed");
+    await setSearchResultStatus(second.id, "downloading");
+    await setSearchResultStatus(second.id, "paused", { expectedStatuses: ["downloading"] });
+
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      status: "download_queued",
+      results: 2,
+      downloaded: 1,
+      downloadProgress: "50%",
+    });
+  });
+
   it("converges to completed when two item completions race in either order", async () => {
     const query = await createQuery();
     const [first, second] = await getItems(query.id);
@@ -128,6 +144,23 @@ describe("query state reconciliation", () => {
       downloaded: 1,
       downloadProgress: "100%",
       status: "completed",
+    });
+  });
+
+  it("finishes a download-stage query when its final child is removed", async () => {
+    const query = await createQuery();
+    const [first, second] = await getItems(query.id);
+
+    await setSearchResultStatus(first.id, "completed");
+    await setSearchResultStatus(second.id, "downloading");
+    await deleteSearchResultAndReconcile(first.id);
+    await deleteSearchResultAndReconcile(second.id);
+
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      status: "completed",
+      results: 0,
+      downloaded: 0,
+      downloadProgress: null,
     });
   });
 });

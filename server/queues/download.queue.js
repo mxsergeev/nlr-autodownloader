@@ -2,6 +2,7 @@ import { downloadQueue } from "../queue.js";
 import { getMetadata } from "../services/db.service.js";
 import { getCurrentQuery, isCurrentGeneration } from "../services/query-generation.service.js";
 import { getDownloadedFileIds, verifyDownloads } from "../services/file.service.js";
+import { reconcilePendingResultsFromFiles } from "../services/query-state.service.js";
 
 /**
  * Queues download jobs for all search result items whose file does not yet exist on disk.
@@ -26,16 +27,26 @@ export async function addDownloadJobBulk({
   const current = await getCurrentQuery(id, currentGeneration);
   if (!current) return false;
 
+  const downloads = await getDownloadedFileIds(current);
+  // A valid canonical file is evidence of completion even when a previous
+  // search/queue transition left its row pending. Reconcile that row before
+  // calculating the missing work so it cannot strand the parent query.
+  if (downloads.size > 0) {
+    await reconcilePendingResultsFromFiles(id, currentGeneration, downloads);
+  }
+
+  const refreshed = await getCurrentQuery(id, currentGeneration);
+  if (!refreshed) return false;
+
   const requestedIds = itemIds
     ? new Set(itemIds.map((itemId) => Number(itemId)))
     : searchResults
       ? new Set(searchResults.map((item) => Number(item.id)))
       : null;
-  const currentItems = (current.searchResults ?? []).filter(
+  const currentItems = (refreshed.searchResults ?? []).filter(
     (item) => (!requestedIds || requestedIds.has(item.id)) && item.status === "pending"
   );
 
-  const downloads = await getDownloadedFileIds(current);
   const { missingFiles } = verifyDownloads(downloads, currentItems);
 
   if (missingFiles.length === 0) {

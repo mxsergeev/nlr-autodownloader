@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeQueryFixture, makeSearchResultFixture } from "../fixtures/query.fixture.js";
@@ -241,6 +242,34 @@ describe("startup recovery", () => {
     ]);
     expect(enqueue.addMetadataJob).not.toHaveBeenCalled();
     expect(query).toBeDefined();
+  });
+
+  it("preserves unrelated files and directories in a configurable downloads folder", async () => {
+    const configuredDownloadsDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "nlr-configured-downloads-")
+    );
+    const unrelatedFile = path.join(configuredDownloadsDir, "notes.txt");
+    const unrelatedDirectory = path.join(configuredDownloadsDir, "personal-files");
+    const orphanDirectory = path.join(configuredDownloadsDir, "999999");
+
+    try {
+      await fs.writeFile(unrelatedFile, "keep this file");
+      await fs.mkdir(unrelatedDirectory, { recursive: true });
+      await fs.writeFile(path.join(unrelatedDirectory, "keep.pdf"), "not app data");
+      await fs.mkdir(orphanDirectory, { recursive: true });
+      await writePdf(path.join(orphanDirectory, "1.pdf"));
+
+      await recoverOnStartup({
+        downloadsDir: configuredDownloadsDir,
+        tempDownloadsDir: path.join(configuredDownloadsDir, ".tmp"),
+      });
+
+      expect(await fs.readFile(unrelatedFile, "utf8")).toBe("keep this file");
+      expect(await fs.stat(path.join(unrelatedDirectory, "keep.pdf"))).toBeTruthy();
+      expect(await fs.stat(orphanDirectory).catch(() => null)).toBeNull();
+    } finally {
+      await fs.rm(configuredDownloadsDir, { recursive: true, force: true });
+    }
   });
 });
 

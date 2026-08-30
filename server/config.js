@@ -23,6 +23,7 @@ function parseList(value, fallback) {
 
 export const config = Object.freeze({
   serverPort: process.env.SERVER_PORT || "3333",
+  serverHost: process.env.SERVER_HOST || "127.0.0.1",
   downloadsDir: process.env.DOWNLOADS_DIR || "/data/downloads",
   downloadsHostDir: process.env.DOWNLOADS_HOST_DIR || "./data/downloads",
   jsonBodyLimit: "32kb",

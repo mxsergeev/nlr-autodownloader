@@ -17,7 +17,9 @@ export async function copyToClipboard(text) {
   document.body.appendChild(textarea);
   textarea.select();
   try {
-    document.execCommand("copy");
+    if (document.execCommand("copy") !== true) {
+      throw new Error("Clipboard copy was rejected");
+    }
   } finally {
     document.body.removeChild(textarea);
   }

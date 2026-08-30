@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { PDFDocument } from "pdf-lib";
 import { runJob } from "./browser.service.js";
 import { isValidPdfFile, sanitizeFileName } from "./file.service.js";
 import { config } from "../config.js";
@@ -15,6 +16,28 @@ import {
 
 const SCRAPE_PAGE_DELAY_MS = config.scrapePageDelayMs;
 const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
+
+/**
+ * Parses the result total shown by Primo's Russian UI.
+ *
+ * Primo may group thousands with an ASCII space, a non-breaking space, or a
+ * narrow non-breaking space (for example, "1 234 результата"). Looking only
+ * for the first run of digits would silently turn that value into 1.
+ *
+ * @param {unknown} value
+ * @returns {number|null}
+ */
+export function parseResultCount(value) {
+  if (typeof value !== "string") return null;
+
+  const groupedMatch = value.match(/(?:^|[^\d])(\d{1,3}(?:[\s\u00a0\u202f]\d{3})+)(?!\d)/u);
+  const plainMatch = value.match(/(?:^|[^\d])(\d+)(?!\d)/u);
+  const rawValue = groupedMatch?.[1] ?? plainMatch?.[1];
+  if (!rawValue) return null;
+
+  const parsed = Number(rawValue.replace(/[\s\u00a0\u202f]/gu, ""));
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 
 /**
  * Scrapes query metadata (result count, pagination) from a Primo result page.
@@ -43,8 +66,7 @@ export async function scrapeMetadata({ url } = {}) {
     const resultCount = await page
       .locator(".results-count", { hasText: "результат" })
       .textContent();
-    const match = resultCount.match(/(\d+)/);
-    const resultNumber = match ? parseInt(match[1], 10) : null;
+    const resultNumber = parseResultCount(resultCount);
     const resultsPerPart = await page.locator(".item-title").count();
     const parts = resultNumber ? Math.ceil(resultNumber / resultsPerPart) : 1;
     const finalUrl = validateFinalNavigation(page, { label: "Metadata final URL" }).href;
@@ -136,7 +158,7 @@ export async function scrapeDownload(item, temporaryFilePath) {
     }
 
     let page1 = null;
-    let page2 = null;
+    const popupPages = [];
     try {
       await gotoAllowed(page, requestedUrl.href, "Document URL");
       const page1Promise = page.waitForEvent("popup", { timeout: 15000 }).catch(() => null);
@@ -153,12 +175,10 @@ export async function scrapeDownload(item, temporaryFilePath) {
       }
       await downloadFromVivaldi(page1, temporaryFilePath, {
         detailsUrl,
-        onPopup: (popup) => {
-          page2 = popup;
-        },
+        onPopup: (popup) => popupPages.push(popup),
       });
     } finally {
-      if (page2) await page2.close();
+      await Promise.all(popupPages.map((popup) => popup.close().catch(() => {})));
       if (page1) await page1.close();
     }
 
@@ -222,43 +242,100 @@ async function waitForVivaldiRoute(page, validator, label) {
 }
 
 /**
- * Completes the old Vivaldi document-download flow after the Primo popup has
- * handed control to a Vivaldi details page. The page prepares one document
+ * Completes the Vivaldi document-download flow after the Primo popup has
+ * handed control to a Vivaldi details page. The page prepares every document
  * part through its own UI; the application never constructs or fetches an
- * arbitrary URL supplied by the caller.
+ * arbitrary URL supplied by the caller. Multipart PDFs are merged in order so
+ * one SearchResult still produces one whole-document PDF.
  */
 async function downloadFromVivaldi(page, temporaryFilePath, { detailsUrl, onPopup } = {}) {
   const validatedDetailsUrl =
     detailsUrl ?? (await waitForVivaldiDetailsPage(page, "Vivaldi details URL"));
   const documentId = getVivaldiDocumentId(validatedDetailsUrl);
   const dialog = page.locator("#download-dialog");
-  const partCount = await dialog.getAttribute("data-partscount");
-  if (partCount !== "1") {
-    throw new Error(`Download blocked: expected one document part, got ${partCount ?? "none"}`);
-  }
+  const partCount = parseVivaldiPartCount(await dialog.getAttribute("data-partscount"));
 
   await validateVivaldiDownloadEndpoints(page, dialog, validatedDetailsUrl, documentId);
 
   await page.locator("#btn-download").click({ timeout: config.downloadEventTimeoutMs });
 
-  const partLink = page.locator(".btn-download-part").first();
-  await partLink.waitFor({
-    state: "visible",
-    timeout: config.downloadPreparationTimeoutMs,
-  });
+  const partLinks = page.locator(".btn-download-part");
+  const partPaths = [];
+  try {
+    for (let part = 0; part < partCount; part++) {
+      const partLink = getPartLink(partLinks, part);
+      await partLink.waitFor({
+        state: "visible",
+        timeout: config.downloadPreparationTimeoutMs,
+      });
 
-  const href = await partLink.getAttribute("href");
-  const expectedPartUrl = validateVivaldiPartUrl(href, {
-    label: "Vivaldi prepared part URL",
-    documentId,
-  });
-  const file = await clickPreparedPartAndCaptureDownload(page, partLink, expectedPartUrl, onPopup);
+      const href = await partLink.getAttribute("href");
+      const expectedPartUrl = validateVivaldiPartUrl(href, {
+        label: `Vivaldi prepared part ${part} URL`,
+        documentId,
+        part,
+      });
+      const partPath = `${temporaryFilePath}.part-${part}`;
+      partPaths.push(partPath);
+      const file = await clickPreparedPartAndCaptureDownload(
+        page,
+        partLink,
+        expectedPartUrl,
+        onPopup
+      );
+      await file.saveAs(partPath);
+      await fs.chmod(partPath, 0o664);
+      if (!(await isValidPdfFile(partPath))) {
+        throw new Error(`Downloaded Vivaldi part ${part} is not a valid PDF`);
+      }
+    }
 
-  await file.saveAs(temporaryFilePath);
-  await fs.chmod(temporaryFilePath, 0o664);
-  if (!(await isValidPdfFile(temporaryFilePath))) {
-    await fs.rm(temporaryFilePath, { force: true });
-    throw new Error("Downloaded file is not a valid PDF");
+    if (partCount === 1) {
+      await fs.rename(partPaths[0], temporaryFilePath);
+    } else {
+      await mergePdfParts(partPaths, temporaryFilePath);
+    }
+
+    if (!(await isValidPdfFile(temporaryFilePath))) {
+      throw new Error("Downloaded whole document is not a valid PDF");
+    }
+  } finally {
+    await Promise.all(partPaths.map((partPath) => fs.rm(partPath, { force: true })));
+  }
+}
+
+function parseVivaldiPartCount(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new Error(`Download blocked: invalid Vivaldi document part count ${value ?? "none"}`);
+  }
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new Error(`Download blocked: invalid Vivaldi document part count ${value}`);
+  }
+  return count;
+}
+
+function getPartLink(partLinks, part) {
+  if (typeof partLinks.nth === "function") return partLinks.nth(part);
+  if (part === 0 && typeof partLinks.first === "function") return partLinks.first();
+  throw new Error("Download blocked: Vivaldi prepared part link is unavailable");
+}
+
+async function mergePdfParts(partPaths, temporaryFilePath) {
+  const mergedPath = `${temporaryFilePath}.merged`;
+  try {
+    const merged = await PDFDocument.create();
+    for (const partPath of partPaths) {
+      const bytes = await fs.readFile(partPath);
+      const source = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      for (const page of pages) merged.addPage(page);
+    }
+    await fs.writeFile(mergedPath, await merged.save());
+    await fs.chmod(mergedPath, 0o664);
+    await fs.rename(mergedPath, temporaryFilePath);
+  } finally {
+    await fs.rm(mergedPath, { force: true });
   }
 }
 
@@ -337,7 +414,8 @@ async function clickPreparedPartAndCaptureDownload(page, partLink, expectedPartU
     const partPageUrl = await waitForVivaldiPartPage(
       firstEvent.popup,
       "Download popup URL",
-      getVivaldiPartDocumentId(expectedPartUrl)
+      getVivaldiPartDocumentId(expectedPartUrl),
+      getVivaldiPartNumber(expectedPartUrl)
     );
     if (partPageUrl.href !== expectedPartUrl.href) {
       throw new Error("Download blocked: download popup URL does not match the prepared part");
@@ -363,12 +441,23 @@ function waitForBrowserEvent(target, event) {
     .catch(() => null);
 }
 
-async function waitForVivaldiPartPage(page, label, documentId) {
+async function waitForVivaldiPartPage(page, label, documentId, part) {
   return waitForVivaldiRoute(
     page,
-    (value, options) => validateVivaldiPartUrl(value, { ...options, documentId }),
+    (value, options) =>
+      validateVivaldiPartUrl(value, {
+        ...options,
+        documentId,
+        part,
+      }),
     label
   );
+}
+
+function getVivaldiPartNumber(url) {
+  const part = url.searchParams.get("part");
+  if (part == null) throw new Error("Download blocked: Vivaldi part number unavailable");
+  return part;
 }
 
 function getVivaldiDocumentId(url) {
@@ -390,6 +479,7 @@ function validateDownloadedFileUrl(file, expectedPartUrl) {
   const actualPartUrl = validateVivaldiPartUrl(actualUrl, {
     label: "Downloaded Vivaldi part URL",
     documentId: getVivaldiPartDocumentId(expectedPartUrl),
+    part: getVivaldiPartNumber(expectedPartUrl),
   });
   if (actualPartUrl.href !== expectedPartUrl.href) {
     throw new Error("Download blocked: downloaded URL does not match the prepared part");

@@ -42,8 +42,8 @@ export async function startApplication({
 
   if (!listen) return workers;
 
-  const server = application.listen(port, () => {
-    console.log(`NLR-AUTODOWNLOADER listening on port ${port}`);
+  const server = application.listen(port, config.serverHost, () => {
+    console.log(`NLR-AUTODOWNLOADER listening on ${config.serverHost}:${port}`);
   });
 
   const shutdown = createShutdown({

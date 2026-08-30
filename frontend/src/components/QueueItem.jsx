@@ -154,6 +154,7 @@ export default React.memo(function QueueItem({
 }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [copiedUrl, setCopiedUrl] = React.useState(false);
+  const [copyError, setCopyError] = React.useState(null);
   const [isZipping, setIsZipping] = React.useState(false);
   const [downloadError, setDownloadError] = React.useState(null);
 
@@ -188,7 +189,9 @@ export default React.memo(function QueueItem({
   const isPaused = status === "paused";
   const isPendingLoading = item.isPending && item.pendingStatus === "loading";
   const canPause =
-    ["pending", "fetching_results", "download_queued", "downloading"].includes(status) || isPaused;
+    ["pending", "fetching_metadata", "fetching_results", "download_queued", "downloading"].includes(
+      status
+    ) || isPaused;
   const canRetry = item.isPending
     ? item.pendingStatus === "error"
     : RETRYABLE_STATUSES.includes(status);
@@ -238,12 +241,18 @@ export default React.memo(function QueueItem({
     onPause?.(item.id);
   };
 
-  const handleCopyUrl = (e) => {
+  const handleCopyUrl = async (e) => {
     e.stopPropagation();
     if (!item?.pageUrl) return;
-    copyToClipboard(item.pageUrl).catch(() => {});
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 1500);
+    setCopyError(null);
+    try {
+      await copyToClipboard(item.pageUrl);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 1500);
+    } catch (error) {
+      setCopiedUrl(false);
+      setCopyError(error?.message ? `Unable to copy URL: ${error.message}` : "Unable to copy URL.");
+    }
   };
 
   const handleDownload = async (e) => {
@@ -345,9 +354,10 @@ export default React.memo(function QueueItem({
               </Typography>
             </Tooltip>
             {item.pageUrl && (
-              <Tooltip title={copiedUrl ? "Copied!" : "Copy URL"}>
+              <Tooltip title={copyError ?? (copiedUrl ? "Copied!" : "Copy URL")}>
                 <IconButton
                   size="small"
+                  aria-label="Copy URL"
                   sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
                   onClick={handleCopyUrl}
                 >
@@ -504,6 +514,19 @@ export default React.memo(function QueueItem({
           </Alert>
         )}
 
+        {copyError && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 1, fontSize: "0.85rem" }}
+            onClose={(e) => {
+              e.stopPropagation();
+              setCopyError(null);
+            }}
+          >
+            {copyError}
+          </Alert>
+        )}
+
         <Box
           sx={{ display: "flex", flexWrap: "wrap", gap: { xs: 1, sm: 2.5 }, alignItems: "center" }}
         >
@@ -611,9 +634,10 @@ export default React.memo(function QueueItem({
               {label}
             </Typography>
             {item.pageUrl && (
-              <Tooltip title={copiedUrl ? "Copied!" : "Copy query URL"}>
+              <Tooltip title={copyError ?? (copiedUrl ? "Copied!" : "Copy query URL")}>
                 <IconButton
                   size="small"
+                  aria-label="Copy query URL"
                   sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
                   onClick={handleCopyUrl}
                 >

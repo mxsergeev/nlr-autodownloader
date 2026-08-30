@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
 import { makeQueryFixture, makeSearchResultFixture } from "../fixtures/query.fixture.js";
 import { deferred } from "../helpers/deferred.js";
 import {
@@ -10,6 +11,7 @@ import {
 import {
   toggleItemPause,
   togglePause,
+  removeItem,
   removeQuery,
   retryQuery,
 } from "../../services/query.service.js";
@@ -158,7 +160,7 @@ describe("generation-based query lifecycle", () => {
 
     await expect(getMetadataById(query.id)).resolves.toMatchObject({ status: "paused" });
     const state = await prisma.searchResult.findUnique({ where: { id: item.id } });
-    expect(state.status).toBe("paused");
+    expect(state.status).toBe("pending");
   });
 
   it("item pause wins a race with an active download claim", async () => {
@@ -208,6 +210,140 @@ describe("generation-based query lifecycle", () => {
 
     await expect(getMetadataById(query.id)).resolves.toBeNull();
     expect(queueFns.cancelDownloadJobs).toHaveBeenCalledWith(item.id);
+  });
+
+  it("deleting an item requeues a pending sibling under the new generation", async () => {
+    const query = await createQuery({ status: "download_queued", results: 2 });
+    const [deleted, survivor] = await saveResults(query.id, 2);
+    scraperFns.scrapeDownload.mockImplementation(async (_item, temporaryFilePath) => {
+      await fs.writeFile(temporaryFilePath, "%PDF-1.7 surviving document");
+    });
+
+    await removeItem(query.id, deleted.id);
+
+    const refreshed = await getMetadataById(query.id);
+    expect(refreshed).toMatchObject({
+      generation: query.generation + 1,
+      status: "download_queued",
+      results: 1,
+      downloaded: 0,
+    });
+    expect(queueFns.addDownloadJobBulk).toHaveBeenCalledWith({
+      queryId: query.id,
+      generation: query.generation + 1,
+    });
+
+    await processDownloadJob(downloadJob(refreshed, survivor));
+
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      status: "completed",
+      downloaded: 1,
+      results: 1,
+    });
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: survivor.id } })
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("deleting an item resets an active sibling and lets fresh work complete", async () => {
+    const query = await createQuery({ status: "download_queued", results: 2 });
+    const [deleted, survivor] = await saveResults(query.id, 2);
+    const started = deferred();
+    const release = deferred();
+    scraperFns.scrapeDownload.mockImplementation(async (_item, temporaryFilePath) => {
+      started.resolve();
+      await release.promise;
+      await fs.writeFile(temporaryFilePath, "%PDF-1.7 surviving document");
+    });
+
+    const staleJob = downloadJob(query, survivor);
+    const staleProcessing = processDownloadJob(staleJob);
+    await started.promise;
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: survivor.id } })
+    ).resolves.toMatchObject({ status: "downloading" });
+
+    await removeItem(query.id, deleted.id);
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: survivor.id } })
+    ).resolves.toMatchObject({ status: "pending" });
+
+    release.resolve();
+    await expect(staleProcessing).resolves.toBeNull();
+
+    const refreshed = await getMetadataById(query.id);
+    scraperFns.scrapeDownload.mockImplementation(async (_item, temporaryFilePath) => {
+      await fs.writeFile(temporaryFilePath, "%PDF-1.7 surviving document");
+    });
+    await processDownloadJob(downloadJob(refreshed, survivor));
+
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      status: "completed",
+      downloaded: 1,
+      results: 1,
+    });
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: survivor.id } })
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("deleting an item preserves a paused sibling until it is explicitly resumed", async () => {
+    const query = await createQuery({ status: "download_queued", results: 2 });
+    const [deleted, survivor] = await saveResults(query.id, 2);
+    await expect(toggleItemPause(query.id, survivor.id)).resolves.toMatchObject({ paused: true });
+
+    await removeItem(query.id, deleted.id);
+
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: survivor.id } })
+    ).resolves.toMatchObject({ status: "paused" });
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      generation: query.generation + 1,
+      status: "download_queued",
+      results: 1,
+    });
+    expect(queueFns.addDownloadJobBulk).not.toHaveBeenCalledWith({
+      queryId: query.id,
+      generation: query.generation + 1,
+    });
+
+    scraperFns.scrapeDownload.mockImplementation(async (_item, temporaryFilePath) => {
+      await fs.writeFile(temporaryFilePath, "%PDF-1.7 surviving document");
+    });
+    await expect(toggleItemPause(query.id, survivor.id)).resolves.toMatchObject({ paused: false });
+    const resumed = await getMetadataById(query.id);
+    await processDownloadJob(downloadJob(resumed, survivor));
+
+    await expect(getMetadataById(query.id)).resolves.toMatchObject({
+      status: "completed",
+      downloaded: 1,
+      results: 1,
+    });
+  });
+
+  it("whole-query pause/resume preserves an independently paused child", async () => {
+    const query = await createQuery({ status: "download_queued", results: 2 });
+    const [individuallyPaused, pending] = await saveResults(query.id, 2);
+    await expect(toggleItemPause(query.id, individuallyPaused.id)).resolves.toMatchObject({
+      paused: true,
+    });
+
+    await expect(togglePause(query.id)).resolves.toMatchObject({ paused: true });
+    await expect(togglePause(query.id)).resolves.toMatchObject({
+      paused: false,
+      status: "download_queued",
+    });
+
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: individuallyPaused.id } })
+    ).resolves.toMatchObject({ status: "paused" });
+    await expect(
+      prisma.searchResult.findUnique({ where: { id: pending.id } })
+    ).resolves.toMatchObject({ status: "pending" });
+    expect(queueFns.addDownloadJobBulk).toHaveBeenCalledWith({
+      queryId: query.id,
+      generation: query.generation + 2,
+    });
   });
 
   it("resumes metadata-stage queries using a fresh generation", async () => {
@@ -295,6 +431,20 @@ async function saveOneResult(queryId) {
     makeSearchResultFixture({ href: `https://primo.nlr.ru/item/${queryId}` }),
   ]);
   return prisma.searchResult.findMany({ where: { queryId } });
+}
+
+async function saveResults(queryId, count) {
+  await saveSearchResults(
+    { queryId },
+    Array.from({ length: count }, (_, index) =>
+      makeSearchResultFixture({
+        title: `Lifecycle document ${index + 1}`,
+        fileName: `Lifecycle document ${index + 1}`,
+        href: `https://primo.nlr.ru/item/${queryId}-${index + 1}`,
+      })
+    )
+  );
+  return prisma.searchResult.findMany({ where: { queryId }, orderBy: { id: "asc" } });
 }
 
 function jobFor(query) {

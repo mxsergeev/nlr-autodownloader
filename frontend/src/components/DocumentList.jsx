@@ -39,15 +39,22 @@ function DocumentRow({
   const isPausing = pausingItemId === doc.id;
   const isDeleting = deletingItemId === doc.id;
   const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState(null);
   const [isDownloading, setIsDownloading] = React.useState(false);
   const [downloadError, setDownloadError] = React.useState(null);
 
-  const handleCopyUrl = (e) => {
+  const handleCopyUrl = async (e) => {
     e.stopPropagation();
     if (!doc.href) return;
-    copyToClipboard(doc.href).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setCopyError(null);
+    try {
+      await copyToClipboard(doc.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      setCopied(false);
+      setCopyError(error?.message ? `Unable to copy URL: ${error.message}` : "Unable to copy URL.");
+    }
   };
 
   const handleDownload = async (e) => {
@@ -160,9 +167,10 @@ function DocumentRow({
           primary={
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, overflow: "hidden" }}>
               {doc.href && (
-                <Tooltip title={copied ? "Copied!" : "Copy URL"}>
+                <Tooltip title={copyError ?? (copied ? "Copied!" : "Copy URL")}>
                   <IconButton
                     size="small"
+                    aria-label={copyError ? "Copy URL failed" : "Copy URL"}
                     sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
                     onClick={handleCopyUrl}
                   >
@@ -187,6 +195,13 @@ function DocumentRow({
                 </Typography>
               </Tooltip>
             </Box>
+          }
+          secondary={
+            copyError ? (
+              <Typography component="span" role="alert" variant="caption" color="error">
+                {copyError}
+              </Typography>
+            ) : null
           }
         />
       </ListItem>

@@ -6,6 +6,10 @@ import QueueItem from "./QueueItem";
 import { fetchQueueItem } from "../api/queue.api.js";
 import { TestProviders } from "../test/test-utils.jsx";
 
+const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
+
+vi.mock("../utils/clipboard.js", () => clipboard);
+
 vi.mock("../api/queue.api.js", () => ({
   fetchQueueItem: vi.fn(),
 }));
@@ -32,6 +36,49 @@ const baseProps = {
 
 describe("QueueItem behavior baseline", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("offers pause while metadata is being fetched", async () => {
+    const user = userEvent.setup();
+    render(
+      <TestProviders>
+        <QueueItem
+          {...baseProps}
+          item={{
+            id: 9,
+            pageUrl: "https://primo.nlr.ru/discovery/search?query=metadata",
+            status: "fetching_metadata",
+            results: null,
+          }}
+        />
+      </TestProviders>
+    );
+
+    await user.click(screen.getByRole("button", { name: "Pause item" }));
+    expect(baseProps.onPause).toHaveBeenCalledWith(9);
+  });
+
+  it("reports clipboard failures instead of claiming the URL was copied", async () => {
+    const user = userEvent.setup();
+    clipboard.copyToClipboard.mockRejectedValueOnce(new Error("Clipboard denied"));
+    render(
+      <TestProviders>
+        <QueueItem
+          {...baseProps}
+          item={{
+            id: 10,
+            pageUrl: "https://primo.nlr.ru/discovery/search?query=clipboard",
+            status: "completed",
+            results: 1,
+          }}
+        />
+      </TestProviders>
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy URL" }));
+
+    expect(await screen.findByText("Unable to copy URL: Clipboard denied")).toBeInTheDocument();
+    expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
+  });
 
   it("exposes retry and delete controls for a persisted failed query", async () => {
     const user = userEvent.setup();

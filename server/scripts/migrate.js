@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
+import { assertCompatibleLegacySchema } from "../services/schema-validation.service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverDirectory = path.resolve(__dirname, "..");
@@ -14,24 +15,6 @@ const prismaCommand = path.join(
 
 const BASELINE_MIGRATION = "20260829000000_init";
 const LIFECYCLE_MIGRATION = "20260829000001_add_query_lifecycle_fields";
-
-const baselineQueryColumns = [
-  "id",
-  "pageUrl",
-  "searchUrl",
-  "status",
-  "results",
-  "resultsPerPart",
-  "parts",
-  "order",
-  "createdAt",
-  "updatedAt",
-  "lastAttempt",
-  "downloaded",
-  "downloadProgress",
-  "warnings",
-];
-const baselineSearchResultColumns = ["id", "title", "href", "fileName", "queryId", "status"];
 
 /**
  * Applies tracked migrations on fresh databases and safely adopts databases
@@ -65,7 +48,8 @@ async function main() {
 
       const queryColumns = await getColumnNames(prisma, "Query");
       const searchResultColumns = await getColumnNames(prisma, "SearchResult");
-      assertCompatibleLegacySchema(queryColumns, searchResultColumns);
+      const constraints = await getLegacyConstraints(prisma);
+      assertCompatibleLegacySchema(queryColumns, searchResultColumns, constraints);
 
       const hasGeneration = queryColumns.has("generation");
       const hasResumeStatus = queryColumns.has("resumeStatus");
@@ -95,21 +79,51 @@ async function main() {
 }
 
 async function getColumnNames(prisma, tableName) {
-  const columns = await prisma.$queryRawUnsafe(`PRAGMA table_info("${tableName}")`);
+  const columns = await prisma.$queryRawUnsafe(`PRAGMA table_info(${quoteIdentifier(tableName)})`);
   return new Set(columns.map(({ name }) => name));
 }
 
-function assertCompatibleLegacySchema(queryColumns, searchResultColumns) {
-  const missingQueryColumns = baselineQueryColumns.filter((column) => !queryColumns.has(column));
-  const missingSearchResultColumns = baselineSearchResultColumns.filter(
-    (column) => !searchResultColumns.has(column)
-  );
+async function getLegacyConstraints(prisma) {
+  return {
+    queryIndexes: await getIndexDefinitions(prisma, "Query"),
+    searchResultIndexes: await getIndexDefinitions(prisma, "SearchResult"),
+    searchResultForeignKeys: await getForeignKeyDefinitions(prisma, "SearchResult"),
+  };
+}
 
-  if (missingQueryColumns.length > 0 || missingSearchResultColumns.length > 0) {
-    throw new Error(
-      `Legacy database schema is incompatible with the tracked baseline (missing Query columns: ${missingQueryColumns.join(", ") || "none"}; missing SearchResult columns: ${missingSearchResultColumns.join(", ") || "none"}). Restore a backup and migrate it deliberately.`
-    );
-  }
+async function getIndexDefinitions(prisma, tableName) {
+  const indexes = await prisma.$queryRawUnsafe(`PRAGMA index_list(${quoteIdentifier(tableName)})`);
+  return Promise.all(
+    indexes.map(async (index) => {
+      const columns = await prisma.$queryRawUnsafe(
+        `PRAGMA index_info(${quoteIdentifier(index.name)})`
+      );
+      return {
+        name: index.name,
+        unique: Number(index.unique) === 1,
+        columns: columns
+          .sort((left, right) => Number(left.seqno) - Number(right.seqno))
+          .map(({ name }) => name),
+      };
+    })
+  );
+}
+
+async function getForeignKeyDefinitions(prisma, tableName) {
+  const foreignKeys = await prisma.$queryRawUnsafe(
+    `PRAGMA foreign_key_list(${quoteIdentifier(tableName)})`
+  );
+  return foreignKeys.map((foreignKey) => ({
+    table: foreignKey.table,
+    from: foreignKey.from,
+    to: foreignKey.to,
+    onDelete: foreignKey.on_delete,
+    onUpdate: foreignKey.on_update,
+  }));
+}
+
+function quoteIdentifier(identifier) {
+  return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
 function runPrisma(args) {

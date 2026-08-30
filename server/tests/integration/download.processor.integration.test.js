@@ -87,9 +87,12 @@ describe("ID-based download finalization", () => {
     expect(await fs.stat(getDownloadedFilePath(query.id, item.id)).catch(() => null)).toBeNull();
     expect(await fs.stat(getDownloadTempPath(job.id)).catch(() => null)).toBeNull();
     expect(await fs.stat(getQueryDownloadDir(query.id)).catch(() => null)).toBeNull();
+    // Whole-query pause invalidates the active generation and returns active
+    // children to pending so resume can recreate their jobs. Only an
+    // independently paused child remains paused across query resume.
     await expect(getMetadataById(query.id)).resolves.toMatchObject({
       status: "paused",
-      searchResults: [{ id: item.id, status: "paused" }],
+      searchResults: [{ id: item.id, status: "pending" }],
     });
   });
 

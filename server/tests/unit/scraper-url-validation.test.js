@@ -1,14 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { PDFDocument } from "pdf-lib";
 import { runDirectory } from "../setup.js";
 
 const browser = vi.hoisted(() => ({ runJob: vi.fn() }));
 
 vi.mock("../../services/browser.service.js", () => browser);
 
-const { scrapeDownload, scrapeMetadata, scrapeSearchResults } =
+const { parseResultCount, scrapeDownload, scrapeMetadata, scrapeSearchResults } =
   await import("../../services/scraper.service.js");
+
+describe("Primo result-count parsing", () => {
+  it.each([
+    ["123 результата", 123],
+    ["1 234 результата", 1234],
+    ["1\u00a0234 результата", 1234],
+    ["1\u202f234 результата", 1234],
+  ])("parses %j as %d", (text, expected) => {
+    expect(parseResultCount(text)).toBe(expected);
+  });
+
+  it("returns null when the result count is absent or unsafe", () => {
+    expect(parseResultCount("результаты не найдены")).toBeNull();
+    expect(parseResultCount(null)).toBeNull();
+    expect(parseResultCount("999999999999999999999 результата")).toBeNull();
+  });
+});
 
 describe("scraper navigation validation", () => {
   beforeEach(() => {
@@ -20,6 +38,7 @@ describe("scraper navigation validation", () => {
       [
         "popup.pdf",
         "popup-route.pdf",
+        "multipart.pdf",
         "unsafe-viewer.pdf",
         "unsafe-part.pdf",
         "unsafe-part-popup.pdf",
@@ -124,6 +143,25 @@ describe("scraper navigation validation", () => {
     expect(await fs.readFile(temporaryFilePath, "utf8")).toContain("%PDF-");
   });
 
+  it("downloads and merges every prepared Vivaldi part in order", async () => {
+    const partDownloads = await Promise.all([makePdfBytes("part one"), makePdfBytes("part two")]);
+    const popup = makeVivaldiPage({ partCount: 2, partDownloads });
+    const primoPage = makePrimoDownloadPage(popup);
+    browser.runJob.mockImplementation(async (callback) => callback(primoPage));
+    const temporaryFilePath = path.join(runDirectory, "multipart.pdf");
+
+    await expect(
+      scrapeDownload(
+        { href: "https://primo.nlr.ru/discovery/fulldisplay?docid=07NLR_LMS022470404" },
+        temporaryFilePath
+      )
+    ).resolves.toBe(temporaryFilePath);
+
+    const merged = await PDFDocument.load(await fs.readFile(temporaryFilePath));
+    expect(merged.getPageCount()).toBe(2);
+    expect(popup.partClicks).toEqual([0, 1]);
+  });
+
   it("accepts a prepared part popup only at the exact Vivaldi part route", async () => {
     const partPopup = makePartDownloadPopup();
     const popup = makeVivaldiPage({ downloadMode: "popup", partPopup });
@@ -221,21 +259,25 @@ function makeMetadataPage(finalUrl) {
 function makeVivaldiPage({
   initialUrl = "https://vivaldi.nlr.ru/pm000053466/view",
   partHref = "https://vivaldi.nlr.ru/pm000053466/partfile?part=0",
+  partCount = 1,
+  partDownloads = null,
   downloadMode = "direct",
   partPopup = null,
   dialogAttributes = {},
 } = {}) {
   let currentUrl = initialUrl;
-  const fakeDownload = {
-    url: () => partHref,
-    saveAs: vi.fn(async (filePath) => {
-      await fs.writeFile(filePath, "%PDF-1.7 test document");
-    }),
-  };
+  const fakeDownloads = (partDownloads ?? [Buffer.from("%PDF-1.7 test document")]).map(
+    (bytes, index) => ({
+      url: () => partHref.replace("part=0", `part=${index}`),
+      saveAs: vi.fn(async (filePath) => {
+        await fs.writeFile(filePath, bytes);
+      }),
+    })
+  );
   const dialog = {
     getAttribute: vi.fn((name) => {
       if (Object.hasOwn(dialogAttributes, name)) return dialogAttributes[name];
-      if (name === "data-partscount") return "1";
+      if (name === "data-partscount") return String(partCount);
       if (name === "data-register-url") return "/pm000053466/registerdownload";
       if (name === "data-prepare-download-url") return "/pm000053466/preparedownload";
       if (name === "data-part-download-url") return "/pm000053466/partfile";
@@ -246,14 +288,17 @@ function makeVivaldiPage({
       return null;
     }),
   };
-  const partLink = {
-    first: vi.fn(function () {
-      return this;
-    }),
+  const partClicks = [];
+  const partLinks = Array.from({ length: partCount }, (_, index) => ({
     waitFor: vi.fn().mockResolvedValue(undefined),
-    getAttribute: vi.fn().mockResolvedValue(partHref),
-    click: vi.fn().mockResolvedValue(undefined),
+    getAttribute: vi.fn().mockResolvedValue(partHref.replace("part=0", `part=${index}`)),
+    click: vi.fn(async () => partClicks.push(index)),
+  }));
+  const partLink = {
+    first: vi.fn(() => partLinks[0]),
+    nth: vi.fn((index) => partLinks[index]),
   };
+  let nextDownload = 0;
   const page = {
     goto: vi.fn(async (url) => {
       currentUrl = url;
@@ -283,15 +328,25 @@ function makeVivaldiPage({
     }),
     waitForEvent: vi.fn((event) => {
       if (event === "download") {
-        return downloadMode === "direct" ? Promise.resolve(fakeDownload) : new Promise(() => {});
+        return downloadMode === "direct"
+          ? Promise.resolve(fakeDownloads[nextDownload++])
+          : new Promise(() => {});
       }
       if (event === "popup") return Promise.resolve(partPopup);
       return Promise.resolve(null);
     }),
     close: vi.fn().mockResolvedValue(undefined),
   };
-  page.__fakeDownload = fakeDownload;
+  page.__fakeDownload = fakeDownloads[0];
+  page.partClicks = partClicks;
   return page;
+}
+
+async function makePdfBytes(text) {
+  const document = await PDFDocument.create();
+  const page = document.addPage([200, 200]);
+  page.drawText(text, { x: 20, y: 100 });
+  return Buffer.from(await document.save());
 }
 
 function makePartDownloadPopup({

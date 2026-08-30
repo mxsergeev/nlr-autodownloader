@@ -49,6 +49,15 @@ Main queues:
 
 Data is persisted in Docker volumes (`redis_data`, `queries_data`) and downloaded files are mounted from `${DOWNLOADS_HOST_DIR}` (default `./data/downloads`) to `/data/downloads` inside the server container.
 
+### Security boundary
+
+Compose binds the server API to `127.0.0.1` by default and does not publish
+Redis to the host. The standalone server also listens on localhost unless
+`SERVER_HOST` is explicitly changed. This application intentionally has no
+authentication or rate limiting; if it is exposed beyond the local machine,
+put it behind an authenticated reverse proxy and an appropriate rate limiter
+or firewall.
+
 ## Development workflow
 
 - Server and frontend sources are bind-mounted, so code changes reload automatically in development mode.
@@ -93,6 +102,7 @@ workers start; `db:push` is not a production deployment mechanism.
 | ---------------------- | ------------------------------------------------------------- | ----------- |
 | `NODE_ENV`             | `production`                                                  | Use `development` for hot reload and Prisma Studio in compose. |
 | `SERVER_PORT`          | `3333`                                                        | Host port mapped to the server container's internal port `3333`. |
+| `SERVER_HOST`          | `127.0.0.1`                                                  | Listen address for standalone server runs; Compose overrides it for the container network. |
 | `DOWNLOADS_HOST_DIR`   | `./data/downloads`                                            | Host directory mounted at the container path in `DOWNLOADS_DIR`. |
 | `DOWNLOADS_DIR`        | `/data/downloads`                                             | Download path used by Node inside the container. |
 | `CONCURRENT_DOWNLOADS` | `2`                                                           | Download worker concurrency. |
@@ -106,7 +116,7 @@ workers start; `db:push` is not a production deployment mechanism.
 | Variable         | Default | Description |
 | ---------------- | ------- | ----------- |
 | `REDIS_HOST`     | `redis` | Redis host used inside the Compose network. |
-| `REDIS_PORT`     | `6379`  | Host port mapped to Redis's internal port `6379`; the server override always uses `6379` internally. |
+| `REDIS_PORT`     | `6379`  | Redis service port inside the Compose network; Redis is not published to the host by default. |
 | `REDIS_PASSWORD` | `1234`  | Redis password. |
 | `REDIS_DB`       | `0`     | Redis database index. |
 
