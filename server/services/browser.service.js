@@ -53,11 +53,20 @@ async function startBrowser() {
     await shutdownBrowser();
   }
 
-  // Firefox is much more consistent in headless mode than Chromium
-  browser = await firefox.launch({
+  // Firefox is much more consistent in headless mode than Chromium. The
+  // Chromium-only command-line switches previously passed here do nothing for
+  // Firefox and can obscure the real reason a root-owned test container fails
+  // to start content processes. Keep sandboxing enabled by default; the
+  // opt-in root fallback is limited to environments where the kernel forbids
+  // Firefox's user-namespace sandbox (production Docker runs as non-root).
+  const launchOptions = {
     headless: config.playwrightHeadless,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
+  };
+  if (process.getuid?.() === 0 && process.env.MOZ_DISABLE_CONTENT_SANDBOX === undefined) {
+    launchOptions.env = { ...process.env, MOZ_DISABLE_CONTENT_SANDBOX: "1" };
+  }
+
+  browser = await firefox.launch(launchOptions);
 }
 
 /**
@@ -96,6 +105,12 @@ export async function runJob(fn) {
       timezoneId,
       locale: "ru-RU",
     };
+    if (
+      process.env.RUN_LIVE_NLR_TESTS === "1" &&
+      process.env.NLR_LIVE_IGNORE_HTTPS_ERRORS === "1"
+    ) {
+      contextOptions.ignoreHTTPSErrors = true;
+    }
 
     try {
       context = await browser.newContext(contextOptions);

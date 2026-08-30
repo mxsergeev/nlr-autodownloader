@@ -1,9 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { scrapeMetadata, scrapeSearchResults } from "../../services/scraper.service.js";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { isValidPdfFile } from "../../services/file.service.js";
+import {
+  scrapeDownload,
+  scrapeMetadata,
+  scrapeSearchResults,
+} from "../../services/scraper.service.js";
 import { shutdownBrowser } from "../../services/browser.service.js";
-import { validateNlrUrl, validateScrapedUrl } from "../../services/url.service.js";
+import { validatePrimoUrl, validateScrapedUrl } from "../../services/url.service.js";
 
-const DEFAULT_SEARCH_URL = "https://primo.nlr.ru/primo-explore/search?query=any,contains,Pushkin";
+const DEFAULT_SEARCH_URL =
+  "https://primo.nlr.ru/primo-explore/search?vid=07NLR_VU1&lang=ru_RU&search_scope=default_scope&tab=default_tab&query=any,contains,07NLR_LMS022470404";
+const EXPECTED_RECORD_ID = "07NLR_LMS022470404";
 const LIVE_TESTS_ENABLED = process.env.RUN_LIVE_NLR_TESTS === "1";
 const SEARCH_URL = process.env.NLR_LIVE_SEARCH_URL || DEFAULT_SEARCH_URL;
 const PROBE_TIMEOUT_MS = 15_000;
@@ -12,7 +22,7 @@ const PROBE_TIMEOUT_MS = 15_000;
 // guarantees that a typo or an untrusted override cannot turn the live gate
 // into a general-purpose browser/fetch runner.
 const validatedSearchUrl = LIVE_TESTS_ENABLED
-  ? validateNlrUrl(SEARCH_URL, { label: "NLR_LIVE_SEARCH_URL" })
+  ? validatePrimoUrl(SEARCH_URL, { label: "NLR_LIVE_SEARCH_URL" })
   : null;
 const probe = LIVE_TESTS_ENABLED
   ? await probeLiveEndpoint(validatedSearchUrl)
@@ -27,6 +37,7 @@ const liveSuite = describe.skipIf(!LIVE_TESTS_ENABLED);
 liveSuite("live NLR scraper contract", () => {
   let metadata;
   let results;
+  let targetResult;
 
   it("accepts the configured real NLR search URL", () => {
     expect(validatedSearchUrl).toBeInstanceOf(URL);
@@ -37,8 +48,8 @@ liveSuite("live NLR scraper contract", () => {
   describe.skipIf(!probe.available)("live selectors and navigation", () => {
     beforeAll(async () => {
       // Deliberately scrape metadata once and only the first result page.
-      // A broad NLR query can contain many pages; this gate is a selector
-      // check, not a bulk crawl or download test.
+      // A broad NLR query can contain many pages; this gate validates one
+      // discovered document end-to-end rather than bulk-crawling the result set.
       metadata = await scrapeMetadata({ url: validatedSearchUrl.href });
       results = await scrapeSearchResults(
         {
@@ -48,6 +59,7 @@ liveSuite("live NLR scraper contract", () => {
         },
         { scrapedUrls: new Set() }
       );
+      targetResult = results.find((result) => result.href.includes(EXPECTED_RECORD_ID));
     }, 60_000);
 
     afterAll(async () => {
@@ -66,7 +78,7 @@ liveSuite("live NLR scraper contract", () => {
       expect(metadata.results).toBeGreaterThan(0);
       expect(metadata.resultsPerPart).toBeGreaterThan(0);
       expect(metadata.parts).toBeGreaterThan(0);
-      expect(validateNlrUrl(metadata.pageUrl).hostname).toBe("primo.nlr.ru");
+      expect(validatePrimoUrl(metadata.pageUrl).hostname).toBe("primo.nlr.ru");
     });
 
     it("finds first-page document links and validates their download URLs", () => {
@@ -84,6 +96,34 @@ liveSuite("live NLR scraper contract", () => {
         expect(documentUrl.protocol).toBe("https:");
       }
     });
+
+    it("discovers the real Primo record and downloads one full PDF through the application scraper", async () => {
+      expect(targetResult).toEqual(
+        expect.objectContaining({
+          href: expect.stringContaining(EXPECTED_RECORD_ID),
+        })
+      );
+      const temporaryDirectory = await fs.mkdtemp(
+        path.join(os.tmpdir(), "nlr-live-application-download-")
+      );
+      const temporaryFilePath = path.join(temporaryDirectory, "document.pdf");
+
+      try {
+        await scrapeDownload(targetResult, temporaryFilePath);
+
+        const contents = await fs.readFile(temporaryFilePath);
+        expect(contents.length).toBeGreaterThan(0);
+        expect(contents.subarray(0, 5).toString()).toBe("%PDF-");
+        expect(contents.includes(Buffer.from("%%EOF"))).toBe(true);
+        await expect(isValidPdfFile(temporaryFilePath)).resolves.toBe(true);
+
+        console.log(
+          `[Live NLR] Primo discovery + application Vivaldi download: ${contents.length} bytes saved`
+        );
+      } finally {
+        await fs.rm(temporaryDirectory, { recursive: true, force: true });
+      }
+    }, 180_000);
   });
 });
 

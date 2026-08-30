@@ -16,7 +16,7 @@ import {
   getValidCompletedItems,
 } from "../services/file.service.js";
 import { config } from "../config.js";
-import { validateNlrUrl } from "../services/url.service.js";
+import { validatePrimoUrl } from "../services/url.service.js";
 
 const router = express.Router();
 
@@ -63,7 +63,7 @@ router.post("/queue", async (req, res) => {
     }
 
     const ops = queries.map(async (q, index) => {
-      const url = validateNlrUrl(q?.url, { label: `Query at index ${index} URL` });
+      const url = validatePrimoUrl(q?.url, { label: `Query at index ${index} URL` });
       const query = await queueQuery({ url: url.href }, { order: index });
       await addMetadataJob({ queryId: query.id, generation: query.generation });
       return { url: url.href, id: query.id };

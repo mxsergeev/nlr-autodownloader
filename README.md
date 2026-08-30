@@ -245,9 +245,11 @@ The smoke script checks:
 
 The normal server test suite intentionally excludes the live NLR suite. The
 live suite is opt-in because it starts Firefox and makes real requests to the
-NLR Primo service. It validates the metadata selector, first-page result-link
-selector, and URL allow-list after navigation. It scrapes one result page only;
-it does not start a download or crawl the whole result set:
+NLR Primo and Vivaldi services. It validates the metadata selector, first-page
+result-link selector, and URL allow-list after navigation. It discovers one
+known digitized Primo record and then downloads one complete PDF through the
+application scraper by following the record's actual Vivaldi viewer/details
+flow. It does not crawl the whole result set:
 
 ```bash
 docker compose exec -e RUN_LIVE_NLR_TESTS=1 server npm run test:live
@@ -255,8 +257,9 @@ docker compose exec -e RUN_LIVE_NLR_TESTS=1 server npm run test:live
 
 When running directly from the server directory, use
 `RUN_LIVE_NLR_TESTS=1 npm run test:live`.
-The default search URL is a Pushkin search on `primo.nlr.ru`. Override it with
-an already-known allowed NLR search page when needed:
+The default search URL targets the real digitized Primo record
+`07NLR_LMS022470404`. Override it with an already-known allowed Primo search
+page when needed:
 
 ```bash
 NLR_LIVE_SEARCH_URL='https://primo.nlr.ru/primo-explore/search?query=any,contains,Pushkin' \
@@ -264,6 +267,11 @@ NLR_LIVE_SEARCH_URL='https://primo.nlr.ru/primo-explore/search?query=any,contain
   npm run test:live
 ```
 
+The override must remain a Primo URL. The fixed download assertion uses the
+known record, so changing the search URL may make the discovery assertion fail
+if that record is not on the first result page.
+
 The gate reports an HTTP outage, rate limit, or unavailable network as a
-skipped live run. An available page with missing selectors remains a test
-failure. The test never queues or downloads anything.
+skipped live run. An available page with missing selectors or an invalid PDF
+remains a test failure. The test never queues jobs or writes to the normal
+download directory; its temporary PDF is removed after validation.

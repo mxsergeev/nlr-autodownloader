@@ -6,6 +6,8 @@ import { config } from "../config.js";
  * input, so both must pass the same allow-list before Playwright sees them.
  */
 export const MAX_NLR_URL_LENGTH = 2048;
+export const PRIMO_NLR_HOST = "primo.nlr.ru";
+export const VIVALDI_NLR_HOST = "vivaldi.nlr.ru";
 
 export const ALLOWED_NLR_HOSTS = Object.freeze(
   (config.allowedNlrHosts ?? ["primo.nlr.ru"]).map((host) => host.toLowerCase())
@@ -69,6 +71,106 @@ export function validateNlrUrl(value, { label = "URL" } = {}) {
 }
 
 /**
+ * Validates an end-user/search-result URL.  The queue and persisted
+ * SearchResult rows intentionally remain Primo-only; Vivaldi is an internal
+ * handoff used by the document scraper and is validated separately below.
+ *
+ * @param {unknown} value
+ * @param {{ label?: string }} [options]
+ * @returns {URL}
+ */
+export function validatePrimoUrl(value, { label = "Primo URL" } = {}) {
+  const parsed = validateNlrUrl(value, { label });
+  if (parsed.hostname.toLowerCase() !== PRIMO_NLR_HOST || parsed.port) {
+    throw new UrlValidationError(`${label} must use the exact HTTPS Primo host`);
+  }
+  return parsed;
+}
+
+/**
+ * Validates a Vivaldi viewer page reached from a Primo document link.
+ *
+ * @param {unknown} value
+ * @param {{ label?: string }} [options]
+ * @returns {URL}
+ */
+export function validateVivaldiViewerUrl(value, { label = "Vivaldi viewer URL" } = {}) {
+  return validateVivaldiDocumentRoute(value, /^\/pm(\d+)\/view$/, label);
+}
+
+/**
+ * Validates a Vivaldi document-details page reached from its viewer card.
+ *
+ * @param {unknown} value
+ * @param {{ label?: string }} [options]
+ * @returns {URL}
+ */
+export function validateVivaldiDetailsUrl(value, { label = "Vivaldi details URL" } = {}) {
+  return validateVivaldiDocumentRoute(value, /^\/pm(\d+)\/details$/, label);
+}
+
+/**
+ * Validates the prepared single-part Vivaldi download URL. If `documentId`
+ * is provided, the part must belong to that exact document.
+ *
+ * @param {unknown} value
+ * @param {{ label?: string, documentId?: string|number }} [options]
+ * @returns {URL}
+ */
+export function validateVivaldiPartUrl(value, { label = "Vivaldi part URL", documentId } = {}) {
+  const parsed = parseVivaldiUrl(value, label);
+  const match = parsed.pathname.match(/^\/pm(\d+)\/partfile$/);
+  if (
+    !match ||
+    (documentId != null && match[1] !== String(documentId)) ||
+    parsed.search !== "?part=0" ||
+    parsed.hash
+  ) {
+    throw new UrlValidationError(`${label} must be an exact Vivaldi part URL`);
+  }
+  return parsed;
+}
+
+function validateVivaldiDocumentRoute(value, pathPattern, label) {
+  const parsed = parseVivaldiUrl(value, label);
+  if (!pathPattern.test(parsed.pathname) || parsed.search || parsed.hash) {
+    throw new UrlValidationError(`${label} is not an exact Vivaldi document route`);
+  }
+  return parsed;
+}
+
+function parseVivaldiUrl(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new UrlValidationError(`${label} must be a non-empty URL`);
+  }
+
+  if (value.length > MAX_NLR_URL_LENGTH) {
+    throw new UrlValidationError(
+      `${label} exceeds the maximum length of ${MAX_NLR_URL_LENGTH} characters`
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new UrlValidationError(`${label} is not a valid URL`);
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new UrlValidationError(`${label} must use HTTPS`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new UrlValidationError(`${label} must not contain credentials`);
+  }
+  if (parsed.hostname.toLowerCase() !== VIVALDI_NLR_HOST || parsed.port) {
+    throw new UrlValidationError(`${label} must use the exact HTTPS Vivaldi host`);
+  }
+
+  return parsed;
+}
+
+/**
  * Boolean convenience wrapper for tests and callers that want to filter a
  * link without handling the validation exception themselves.
  *
@@ -121,5 +223,5 @@ export function validateScrapedUrl(value, baseUrl, { label = "Scraped link" } = 
     throw new UrlValidationError(`${label} is not a valid URL`);
   }
 
-  return validateNlrUrl(absolute.href, { label });
+  return validatePrimoUrl(absolute.href, { label });
 }

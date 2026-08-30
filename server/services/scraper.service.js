@@ -1,9 +1,17 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { runJob } from "./browser.service.js";
-import { sanitizeFileName } from "./file.service.js";
+import { isValidPdfFile, sanitizeFileName } from "./file.service.js";
 import { config } from "../config.js";
-import { validateFinalNavigation, validateNlrUrl, validateScrapedUrl } from "./url.service.js";
+import {
+  validateFinalNavigation,
+  validatePrimoUrl,
+  validateScrapedUrl,
+  validateVivaldiDetailsUrl,
+  validateVivaldiPartUrl,
+  validateVivaldiViewerUrl,
+  VIVALDI_NLR_HOST,
+} from "./url.service.js";
 
 const SCRAPE_PAGE_DELAY_MS = config.scrapePageDelayMs;
 const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
@@ -14,7 +22,7 @@ const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
  * @returns {Promise<{ results: number, resultsPerPart: number, parts: number, pageUrl: string }>}
  */
 export async function scrapeMetadata({ url } = {}) {
-  const requestedUrl = validateNlrUrl(url, { label: "Metadata URL" });
+  const requestedUrl = validatePrimoUrl(url, { label: "Metadata URL" });
 
   return runJob(async (page) => {
     await gotoAllowed(page, requestedUrl.href, "Metadata URL");
@@ -57,7 +65,7 @@ export async function scrapeMetadata({ url } = {}) {
  * @returns {Promise<{ title: string, href: string, fileName: string }[]>}
  */
 export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } = {}) {
-  const requestedUrl = validateNlrUrl(metadata.searchUrl || metadata.pageUrl, {
+  const requestedUrl = validatePrimoUrl(metadata.searchUrl || metadata.pageUrl, {
     label: "Search URL",
   });
 
@@ -118,7 +126,7 @@ export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } 
  * @returns {Promise<string>} The temporary file path.
  */
 export async function scrapeDownload(item, temporaryFilePath) {
-  const requestedUrl = validateNlrUrl(item?.href, { label: "Document URL" });
+  const requestedUrl = validatePrimoUrl(item?.href, { label: "Document URL" });
 
   return runJob(async (page) => {
     await fs.mkdir(path.dirname(temporaryFilePath), { recursive: true });
@@ -135,32 +143,20 @@ export async function scrapeDownload(item, temporaryFilePath) {
       await page.getByLabel("Электронная копия").click();
       page1 = await page1Promise;
       if (!page1) throw new Error("Download blocked: detail page popup did not open");
-      await waitForAllowedPage(page1, "Document popup URL");
+      const viewerUrl = await waitForVivaldiViewerPage(page1, "Document viewer URL");
       await page1.getByRole("link", { name: "Карточка" }).click();
-      await waitForAllowedPage(page1, "Document card URL");
-      await page1.locator("#btn-download").click();
-
-      const page2Promise = page1.waitForEvent("popup", { timeout: 30000 }).catch(() => null);
-      const downloadPromise = page1.waitForEvent("download", { timeout: 30000 }).catch(() => null);
-
-      await page1
-        .getByLabel("Загрузка всего документа")
-        .getByRole("link", { name: "Скачать" })
-        .click({ timeout: 30000 })
-        .catch(() => {
-          throw new Error("Download blocked");
-        });
-
-      page2 = await page2Promise;
-      if (page2) await waitForAllowedPage(page2, "Download popup URL");
-      const file = await downloadPromise;
-
-      if (!file) {
-        throw new Error("Download blocked: no download event received within timeout");
+      const detailsUrl = await waitForVivaldiDetailsPage(page1, "Document card URL");
+      if (getVivaldiDocumentId(viewerUrl) !== getVivaldiDocumentId(detailsUrl)) {
+        throw new Error(
+          "Download blocked: Vivaldi viewer and details pages refer to different documents"
+        );
       }
-
-      await file.saveAs(temporaryFilePath);
-      await fs.chmod(temporaryFilePath, 0o664);
+      await downloadFromVivaldi(page1, temporaryFilePath, {
+        detailsUrl,
+        onPopup: (popup) => {
+          page2 = popup;
+        },
+      });
     } finally {
       if (page2) await page2.close();
       if (page1) await page1.close();
@@ -176,16 +172,228 @@ export async function scrapeDownload(item, temporaryFilePath) {
  * are required.
  */
 async function gotoAllowed(page, requestedUrl, label) {
-  validateNlrUrl(requestedUrl, { label });
+  validatePrimoUrl(requestedUrl, { label });
   await page.goto(requestedUrl);
-  validateFinalNavigation(page, { label: `Final ${label}` });
+  validatePrimoUrl(page.url(), { label: `Final ${label}` });
 }
 
-async function waitForAllowedPage(page, label) {
+async function waitForVivaldiViewerPage(page, label) {
+  return waitForVivaldiRoute(page, validateVivaldiViewerUrl, label);
+}
+
+async function waitForVivaldiDetailsPage(page, label) {
+  return waitForVivaldiRoute(page, validateVivaldiDetailsUrl, label);
+}
+
+async function waitForVivaldiRoute(page, validator, label) {
+  let currentUrl;
+  try {
+    currentUrl = validator(page.url(), { label });
+  } catch {
+    if (typeof page.waitForURL !== "function") {
+      if (typeof page.waitForLoadState === "function") {
+        await page.waitForLoadState("domcontentloaded").catch(() => null);
+      }
+      return validator(page.url(), { label });
+    }
+
+    await page.waitForURL(
+      (candidate) => {
+        const candidateHref = candidate instanceof URL ? candidate.href : String(candidate);
+        try {
+          validator(candidateHref, { label });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      {
+        timeout: config.downloadEventTimeoutMs,
+        waitUntil: "commit",
+      }
+    );
+    return validator(page.url(), { label });
+  }
+
   if (typeof page.waitForLoadState === "function") {
     await page.waitForLoadState("domcontentloaded").catch(() => null);
   }
-  validateFinalNavigation(page, { label });
+  return currentUrl;
+}
+
+/**
+ * Completes the old Vivaldi document-download flow after the Primo popup has
+ * handed control to a Vivaldi details page. The page prepares one document
+ * part through its own UI; the application never constructs or fetches an
+ * arbitrary URL supplied by the caller.
+ */
+async function downloadFromVivaldi(page, temporaryFilePath, { detailsUrl, onPopup } = {}) {
+  const validatedDetailsUrl =
+    detailsUrl ?? (await waitForVivaldiDetailsPage(page, "Vivaldi details URL"));
+  const documentId = getVivaldiDocumentId(validatedDetailsUrl);
+  const dialog = page.locator("#download-dialog");
+  const partCount = await dialog.getAttribute("data-partscount");
+  if (partCount !== "1") {
+    throw new Error(`Download blocked: expected one document part, got ${partCount ?? "none"}`);
+  }
+
+  await validateVivaldiDownloadEndpoints(page, dialog, validatedDetailsUrl, documentId);
+
+  await page.locator("#btn-download").click({ timeout: config.downloadEventTimeoutMs });
+
+  const partLink = page.locator(".btn-download-part").first();
+  await partLink.waitFor({
+    state: "visible",
+    timeout: config.downloadPreparationTimeoutMs,
+  });
+
+  const href = await partLink.getAttribute("href");
+  const expectedPartUrl = validateVivaldiPartUrl(href, {
+    label: "Vivaldi prepared part URL",
+    documentId,
+  });
+  const file = await clickPreparedPartAndCaptureDownload(page, partLink, expectedPartUrl, onPopup);
+
+  await file.saveAs(temporaryFilePath);
+  await fs.chmod(temporaryFilePath, 0o664);
+  if (!(await isValidPdfFile(temporaryFilePath))) {
+    await fs.rm(temporaryFilePath, { force: true });
+    throw new Error("Downloaded file is not a valid PDF");
+  }
+}
+
+async function validateVivaldiDownloadEndpoints(page, dialog, detailsUrl, documentId) {
+  const endpointAttributes = [
+    [dialog, "data-register-url", "registerdownload"],
+    [dialog, "data-prepare-download-url", "preparedownload"],
+    [page.locator("#progressbar"), "data-progress", "downloadprogress"],
+    [dialog, "data-part-download-url", "partfile"],
+    [dialog, "data-cancel-url", "canceldownload"],
+    [dialog, "data-keep-process-alive-url", "keepdownloadprocessalive"],
+  ];
+
+  for (const [locator, attribute, endpoint] of endpointAttributes) {
+    const value = await locator.getAttribute(attribute);
+    validateVivaldiEndpointUrl(value, detailsUrl, documentId, endpoint, attribute);
+  }
+}
+
+function validateVivaldiEndpointUrl(value, detailsUrl, documentId, endpoint, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Download blocked: ${label} is missing`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value, detailsUrl.origin);
+  } catch {
+    throw new Error(`Download blocked: ${label} is not a valid URL`);
+  }
+
+  const expectedPath = `/pm${documentId}/${endpoint}`;
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname.toLowerCase() !== VIVALDI_NLR_HOST ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    parsed.origin !== detailsUrl.origin ||
+    parsed.pathname !== expectedPath ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(`Download blocked: ${label} is outside the expected Vivaldi endpoint`);
+  }
+
+  return parsed;
+}
+
+async function clickPreparedPartAndCaptureDownload(page, partLink, expectedPartUrl, onPopup) {
+  const downloadPromise = waitForBrowserEvent(page, "download");
+  const popupPromise = waitForBrowserEvent(page, "popup");
+
+  await partLink.click({ timeout: config.downloadEventTimeoutMs });
+  const firstEvent = await Promise.race([
+    downloadPromise.then((file) => ({ type: "download", file })),
+    popupPromise.then((popup) => ({ type: "popup", popup })),
+  ]);
+
+  if (!firstEvent) {
+    throw new Error("Download blocked: no download or part popup event received within timeout");
+  }
+
+  if (firstEvent.type === "download" && firstEvent.file) {
+    validateDownloadedFileUrl(firstEvent.file, expectedPartUrl);
+    return firstEvent.file;
+  }
+
+  if (firstEvent.type === "popup" && firstEvent.popup) {
+    onPopup?.(firstEvent.popup);
+    // A target="_blank" part link can navigate directly to an attachment.
+    // Arm the popup listener before waiting for navigation or URL validation;
+    // otherwise a fast response can emit the download event while the popup
+    // is still being validated and the file is lost.
+    const popupDownloadPromise = waitForBrowserEvent(firstEvent.popup, "download");
+    const partPageUrl = await waitForVivaldiPartPage(
+      firstEvent.popup,
+      "Download popup URL",
+      getVivaldiPartDocumentId(expectedPartUrl)
+    );
+    if (partPageUrl.href !== expectedPartUrl.href) {
+      throw new Error("Download blocked: download popup URL does not match the prepared part");
+    }
+
+    const popupResult = await Promise.race([
+      downloadPromise.then((file) => ({ source: "opener", file })),
+      popupDownloadPromise.then((file) => ({ source: "popup", file })),
+    ]);
+    if (popupResult?.file) {
+      validateDownloadedFileUrl(popupResult.file, expectedPartUrl);
+      return popupResult.file;
+    }
+  }
+
+  throw new Error("Download blocked: no download event received within timeout");
+}
+
+function waitForBrowserEvent(target, event) {
+  return target
+    .waitForEvent(event, { timeout: config.downloadEventTimeoutMs })
+    .then((value) => value || null)
+    .catch(() => null);
+}
+
+async function waitForVivaldiPartPage(page, label, documentId) {
+  return waitForVivaldiRoute(
+    page,
+    (value, options) => validateVivaldiPartUrl(value, { ...options, documentId }),
+    label
+  );
+}
+
+function getVivaldiDocumentId(url) {
+  const match = url.pathname.match(/^\/pm(\d+)\/(?:view|details)$/);
+  if (!match) throw new Error("Download blocked: Vivaldi document ID unavailable");
+  return match[1];
+}
+
+function getVivaldiPartDocumentId(url) {
+  const match = url.pathname.match(/^\/pm(\d+)\/partfile$/);
+  if (!match) throw new Error("Download blocked: Vivaldi part document ID unavailable");
+  return match[1];
+}
+
+function validateDownloadedFileUrl(file, expectedPartUrl) {
+  const actualUrl = typeof file?.url === "function" ? file.url() : null;
+  if (!actualUrl) throw new Error("Download blocked: downloaded URL unavailable");
+
+  const actualPartUrl = validateVivaldiPartUrl(actualUrl, {
+    label: "Downloaded Vivaldi part URL",
+    documentId: getVivaldiPartDocumentId(expectedPartUrl),
+  });
+  if (actualPartUrl.href !== expectedPartUrl.href) {
+    throw new Error("Download blocked: downloaded URL does not match the prepared part");
+  }
 }
 
 /**

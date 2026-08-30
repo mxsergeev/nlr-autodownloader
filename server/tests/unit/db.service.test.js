@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { prisma, saveSearchResults, upsertMetadata } from "../../services/db.service.js";
+import { UrlValidationError } from "../../services/url.service.js";
 import { makeQueryFixture, makeSearchResultFixture } from "../fixtures/query.fixture.js";
 
 describe("database service characterization", () => {
@@ -22,5 +23,19 @@ describe("database service characterization", () => {
     const updated = await prisma.searchResult.findFirstOrThrow();
     expect(updated.status).toBe("completed");
     expect(updated.title).toBe("Updated title");
+  });
+
+  it("does not persist Vivaldi URLs as query or search-result input", async () => {
+    await expect(
+      upsertMetadata({ url: "https://vivaldi.nlr.ru/pm000053466/details" }, makeQueryFixture())
+    ).rejects.toBeInstanceOf(UrlValidationError);
+
+    const fixture = makeQueryFixture();
+    const query = await upsertMetadata({ url: fixture.pageUrl }, fixture);
+    await expect(
+      saveSearchResults({ queryId: query.id }, [
+        makeSearchResultFixture({ href: "https://vivaldi.nlr.ru/pm000053466/details" }),
+      ])
+    ).rejects.toBeInstanceOf(UrlValidationError);
   });
 });

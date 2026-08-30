@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { validatePrimoUrl } from "./url.service.js";
 
 export const prisma = new PrismaClient();
 
@@ -33,18 +34,23 @@ export async function getMetadata({ id, url }) {
  * counters/progress are derived by query-state.service.js.
  */
 export async function upsertMetadata({ id, url }, metadata) {
+  const validatedUrl = url == null ? null : validatePrimoUrl(url, { label: "Query URL" }).href;
   const data = normalize(metadata);
+  if (data.pageUrl != null)
+    data.pageUrl = validatePrimoUrl(data.pageUrl, { label: "Query page URL" }).href;
+  if (data.searchUrl != null)
+    data.searchUrl = validatePrimoUrl(data.searchUrl, { label: "Query search URL" }).href;
 
   if (id) {
     const record = await prisma.query.update({ where: { id: Number(id) }, data });
     return toSerializableQuery(record);
   }
 
-  if (url) {
+  if (validatedUrl) {
     // pageUrl is unique in the schema - use upsert by pageUrl
     const record = await prisma.query.upsert({
-      where: { pageUrl: url },
-      create: { pageUrl: url, ...data },
+      where: { pageUrl: validatedUrl },
+      create: { pageUrl: validatedUrl, ...data },
       update: data,
     });
     return toSerializableQuery(record);
@@ -104,7 +110,13 @@ export async function getSearchResults({ queryId } = {}) {
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
 export async function saveSearchResults({ queryId, generation }, results) {
-  const hrefs = results.map((r) => r.href);
+  const normalizedResults = results.map((result, index) => ({
+    ...result,
+    href: validatePrimoUrl(result?.href, {
+      label: `Search result at index ${index} URL`,
+    }).href,
+  }));
+  const hrefs = normalizedResults.map((r) => r.href);
   let saved = false;
 
   // Interactive transaction: delete removed items, then insert only new ones.
@@ -132,7 +144,7 @@ export async function saveSearchResults({ queryId, generation }, results) {
       select: { href: true },
     });
     const existingHrefs = new Set(existing.map((r) => r.href));
-    const newResults = results.filter((r) => !existingHrefs.has(r.href));
+    const newResults = normalizedResults.filter((r) => !existingHrefs.has(r.href));
 
     await tx.searchResult.deleteMany({
       where: { queryId: Number(queryId), href: { notIn: hrefs } },
@@ -152,7 +164,7 @@ export async function saveSearchResults({ queryId, generation }, results) {
     // Keep display metadata in the same transaction as insertion/deletion so
     // a lifecycle invalidation cannot leave a partial stale scrape behind.
     await Promise.all(
-      results.map((r) =>
+      normalizedResults.map((r) =>
         tx.searchResult.updateMany({
           where: { queryId: Number(queryId), href: r.href },
           data: { title: r.title, fileName: r.fileName },

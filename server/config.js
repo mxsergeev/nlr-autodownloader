@@ -34,6 +34,8 @@ export const config = Object.freeze({
   retryBaseDelayMs: parseInteger(process.env.RETRY_BASE_DELAY_MS, 5000),
   retryMaxDelayMs: parseInteger(process.env.RETRY_MAX_DELAY_MS, 30000),
   maxBrowserContexts: parseInteger(process.env.MAX_BROWSER_CONTEXTS, 3),
+  downloadPreparationTimeoutMs: parseInteger(process.env.DOWNLOAD_PREPARATION_TIMEOUT_MS, 120_000),
+  downloadEventTimeoutMs: parseInteger(process.env.DOWNLOAD_EVENT_TIMEOUT_MS, 30_000),
   playwrightHeadless:
     process.env.PLAYWRIGHT_HEADLESS === undefined || process.env.PLAYWRIGHT_HEADLESS === "true",
   scrapePageDelayMs: parseInteger(process.env.SCRAPE_PAGE_DELAY_MS, 1200),
