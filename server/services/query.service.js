@@ -1,12 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import {
-  getMetadata,
-  upsertMetadata,
-  deleteMetadata,
-  updateSearchResult,
-  deleteSearchResult,
-} from "./db.service.js";
+import { getMetadata, upsertMetadata, deleteMetadata } from "./db.service.js";
+import { deleteSearchResultAndReconcile, setSearchResultStatus } from "./query-state.service.js";
 import { DOWNLOADS_DIR, queryToString, deleteDownloadedFile } from "./file.service.js";
 import { searchQueue, downloadQueue } from "../queue.js";
 import { addMetadataJob } from "../queues/metadata.queue.js";
@@ -146,9 +141,7 @@ export async function togglePause(id) {
     await upsertMetadata({ id: Number(id) }, { status: newStatus });
 
     if (pausedItems.length > 0) {
-      await Promise.all(
-        pausedItems.map((item) => updateSearchResult(item.id, { status: "pending" }))
-      );
+      await Promise.all(pausedItems.map((item) => setSearchResultStatus(item.id, "pending")));
     }
 
     if (itemsToQueue.length > 0) {
@@ -182,7 +175,7 @@ export async function togglePause(id) {
           })
         );
 
-        await updateSearchResult(item.id, { status: "paused" });
+        await setSearchResultStatus(item.id, "paused");
       })
     );
 
@@ -225,7 +218,7 @@ export async function toggleItemPause(queryId, itemId) {
 
   if (item.status === "paused") {
     // Resume
-    await updateSearchResult(Number(itemId), { status: "pending" });
+    await setSearchResultStatus(Number(itemId), "pending");
     await addDownloadJobBulk({ metadata, searchResults: [item] });
     return { paused: false, id: Number(itemId) };
   } else {
@@ -237,14 +230,14 @@ export async function toggleItemPause(queryId, itemId) {
         await job.remove();
       }
     }
-    await updateSearchResult(Number(itemId), { status: "paused" });
+    await setSearchResultStatus(Number(itemId), "paused");
     return { paused: true, id: Number(itemId) };
   }
 }
 
 /**
  * Removes a single SearchResult: cancels its waiting BullMQ job, deletes the DB record,
- * and decrements Query.results.
+ * and reconciles the parent counters/status from the remaining rows.
  * Throws NOT_FOUND if the query or item does not exist.
  * @param {number} queryId
  * @param {number} itemId
@@ -274,7 +267,7 @@ export async function removeItem(queryId, itemId) {
     }
   }
 
-  await deleteSearchResult(Number(itemId));
+  await deleteSearchResultAndReconcile(Number(itemId));
 
   try {
     await deleteDownloadedFile(Number(queryId), item.fileName);
@@ -282,14 +275,6 @@ export async function removeItem(queryId, itemId) {
     console.warn(`Could not delete file for item ${itemId}:`, err.message);
   }
 
-  if (metadata.results != null && metadata.results > 0) {
-    const wasDownloaded = item.status === "completed" && metadata.downloaded > 0;
-    await upsertMetadata(
-      { id: Number(queryId) },
-      {
-        results: metadata.results - 1,
-        downloaded: wasDownloaded ? metadata.downloaded - 1 : metadata.downloaded,
-      }
-    );
-  }
+  // The SearchResult deletion and logical-state reconciliation are already
+  // atomic. Filesystem cleanup deliberately remains separate from DB state.
 }

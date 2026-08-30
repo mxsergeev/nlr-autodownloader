@@ -29,7 +29,8 @@ export async function getMetadata({ id, url }) {
 /**
  * Creates or updates the query record from a Prisma-shaped object.
  * @param {{ id?: number, url?: string }} params
- * @param {object} metadata  Prisma-compatible fields (results, resultsPerPart, parts, pageUrl, createdAt, order, status, lastAttempt, downloaded, downloadProgress)
+ * @param {object} metadata  Prisma-compatible metadata fields. Download
+ * counters/progress are derived by query-state.service.js.
  */
 export async function upsertMetadata({ id, url }, metadata) {
   const data = normalize(metadata);
@@ -144,34 +145,6 @@ export async function saveSearchResults({ queryId }, results) {
   );
 }
 
-export async function updateSearchResult(id, data) {
-  await prisma.searchResult.update({ where: { id: Number(id) }, data });
-}
-
-/**
- * Atomically increments Query.downloaded by 1 and updates lastAttempt.
- * Returns the updated record fields needed for status computation.
- * Using an atomic DB increment avoids race conditions when multiple download
- * workers complete simultaneously.
- * @param {number} id
- * @returns {Promise<{ id: number, status: string, results: number|null, downloaded: number }>}
- */
-export async function incrementDownloaded(id) {
-  return prisma.query.update({
-    where: { id: Number(id) },
-    data: { downloaded: { increment: 1 }, lastAttempt: new Date() },
-    select: { id: true, status: true, results: true, downloaded: true },
-  });
-}
-
-/**
- * Deletes a single SearchResult by id.
- * @param {number} id
- */
-export async function deleteSearchResult(id) {
-  await prisma.searchResult.delete({ where: { id: Number(id) } });
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -209,8 +182,6 @@ function normalize(metadata) {
   if ("status" in metadata) result.status = metadata.status;
   if ("lastAttempt" in metadata)
     result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null;
-  if ("downloaded" in metadata) result.downloaded = metadata.downloaded ?? 0;
-  if ("downloadProgress" in metadata) result.downloadProgress = metadata.downloadProgress ?? null;
   if ("warnings" in metadata) result.warnings = metadata.warnings ?? null;
 
   return result;

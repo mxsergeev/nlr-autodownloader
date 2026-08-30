@@ -10,6 +10,7 @@ import {
   upsertMetadata,
 } from "../../services/db.service.js";
 import { addDownloadJobBulk } from "../../queues/download.queue.js";
+import { reconcileQueryState, setSearchResultStatus } from "../../services/query-state.service.js";
 
 /**
  * BullMQ processor for search jobs. Kept separate from Worker construction so
@@ -93,11 +94,20 @@ export async function processSearchJob(job) {
     }
   );
 
+  // Normalize the denormalized counters from the rows that were just loaded.
+  // The queue decision below still uses the existing filesystem behavior; it
+  // must not be allowed to write a parent status independently of child state.
+  await reconcileQueryState(metadata.id);
+
   const hasJobs = await addDownloadJobBulk({ metadata, searchResults: results });
 
   if (!hasJobs) {
-    // All files are already on disk — no download jobs to run, mark completed immediately
-    await upsertMetadata({ id: metadata.id }, { status: "completed" });
+    // Existing files are the current physical-download shortcut. Reflect that
+    // shortcut through child state so reconciliation, rather than this worker,
+    // derives the completed parent status.
+    for (const item of results) {
+      await setSearchResultStatus(item.id, "completed");
+    }
   }
 
   return { metadata, searchResults: results };

@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  getMetadataById,
-  incrementDownloaded,
-  prisma,
-  saveSearchResults,
-  upsertMetadata,
-} from "../../services/db.service.js";
+import { prisma, saveSearchResults, upsertMetadata } from "../../services/db.service.js";
 import { makeQueryFixture, makeSearchResultFixture } from "../fixtures/query.fixture.js";
 
 describe("database service characterization", () => {
@@ -28,15 +22,5 @@ describe("database service characterization", () => {
     const updated = await prisma.searchResult.findFirstOrThrow();
     expect(updated.status).toBe("completed");
     expect(updated.title).toBe("Updated title");
-  });
-
-  it("applies concurrent downloaded increments atomically", async () => {
-    const fixture = makeQueryFixture({ results: 2 });
-    const query = await upsertMetadata({ url: fixture.pageUrl }, fixture);
-
-    await Promise.all([incrementDownloaded(query.id), incrementDownloaded(query.id)]);
-
-    const updated = await getMetadataById(query.id);
-    expect(updated.downloaded).toBe(2);
   });
 });
