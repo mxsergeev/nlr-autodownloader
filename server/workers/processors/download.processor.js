@@ -1,13 +1,17 @@
+import { promises as fs } from "fs";
 import path from "path";
 import { scrapeDownload } from "../../services/scraper.service.js";
-import { config, downloadsDir } from "../../config.js";
+import { config } from "../../config.js";
 import { addDownloadRetryJob } from "../../queues/download.queue.js";
+import { prisma } from "../../services/db.service.js";
 import { getCurrentQuery, parseJobIdentifiers } from "../../services/query-generation.service.js";
+import { completeSearchResult, setSearchResultStatus } from "../../services/query-state.service.js";
 import {
-  setSearchResultStatus,
-  completeSearchResult,
-  blockSearchResult,
-} from "../../services/query-state.service.js";
+  getDownloadTempPath,
+  getDownloadedFilePath,
+  getQueryDownloadDir,
+  isValidPdfFile,
+} from "../../services/file.service.js";
 
 const {
   concurrentDownloads: CONCURRENT_DOWNLOADS,
@@ -22,7 +26,12 @@ export { CONCURRENT_DOWNLOADS };
  * BullMQ processor for download jobs. Jobs contain only immutable identifiers;
  * href/fileName are loaded from the current SearchResult row.
  *
- * @param {import("bullmq").Job} job
+ * Browser output is always written to the global temporary area. Finalization
+ * validates the output, rechecks the lifecycle generation, atomically moves
+ * the file to its ID-based path, and completes the item in the same guarded
+ * state transition.
+ *
+ * @param {import('bullmq').Job} job
  */
 export async function processDownloadJob(job) {
   const identifiers = parseJobIdentifiers(job?.data, { itemRequired: true });
@@ -43,11 +52,104 @@ export async function processDownloadJob(job) {
   });
   if (!markedDownloading) return null;
 
-  // The query/item can be paused or deleted immediately after the claim. The
-  // browser operation may finish, but its completion handler will reject the
-  // stale generation/status and cannot commit logical state.
-  const storageDir = path.join(downloadsDir, queryId.toString());
-  await scrapeDownload(item, storageDir);
+  const temporaryFilePath = getDownloadTempPath(job?.id ?? `download-${itemId}-g${generation}`);
+  await fs.mkdir(getTemporaryDirectory(temporaryFilePath), { recursive: true });
+
+  try {
+    // The real scraper returns this path. The undefined/no-file branch keeps
+    // direct package-3 lifecycle tests that stub browser work compatible when
+    // their query has already become stale. A live job with no output is a
+    // genuine download failure and must reject so BullMQ can run its retry
+    // policy instead of leaving the item stuck in `downloading`.
+    await scrapeDownload(item, temporaryFilePath);
+    if (!(await fileExists(temporaryFilePath))) {
+      const current = await getCurrentQuery(queryId, generation);
+      const currentItem = current?.searchResults.find((result) => result.id === itemId);
+      if (!currentItem || currentItem.status !== "downloading") return null;
+      throw new Error("Downloaded file is missing");
+    }
+
+    if (!(await isValidPdfFile(temporaryFilePath))) {
+      throw new Error("Downloaded file is not a valid PDF");
+    }
+
+    return await finalizeDownload({
+      queryId,
+      generation,
+      itemId,
+      temporaryFilePath,
+    });
+  } finally {
+    await fs.rm(temporaryFilePath, { force: true }).catch(() => null);
+  }
+}
+
+/**
+ * Finalizes a validated temporary file and completes its SearchResult.
+ *
+ * The transaction takes a SQLite write lock through a conditional no-op item
+ * update before creating the query directory or renaming the file. Pause,
+ * delete, and generation changes therefore either win before finalization or
+ * wait until this whole physical/logical commit has completed. A stale worker
+ * never creates a final file after deletion, and a failed completion removes a
+ * file moved by this invocation.
+ *
+ * @param {{ queryId: number, generation: number, itemId: number, temporaryFilePath: string }} params
+ * @returns {Promise<object|null>}
+ */
+export async function finalizeDownload({ queryId, generation, itemId, temporaryFilePath }) {
+  const finalPath = getDownloadedFilePath(queryId, itemId);
+  let moved = false;
+
+  if (!(await isValidPdfFile(temporaryFilePath))) {
+    throw new Error("Downloaded file is not a valid PDF");
+  }
+
+  try {
+    const completed = await prisma.$transaction(async (tx) => {
+      let query = await getCurrentQuery(queryId, generation, { tx });
+      if (!query) return null;
+
+      let item = query.searchResults.find((result) => result.id === itemId);
+      if (!item || item.status !== "downloading") return null;
+
+      // This conditional write is both a final item/generation guard and a
+      // write-lock acquisition for SQLite lifecycle transactions.
+      const lock = await tx.searchResult.updateMany({
+        where: { id: itemId, queryId, status: "downloading" },
+        data: { status: "downloading" },
+      });
+      if (lock.count !== 1) return null;
+
+      // Re-read immediately after acquiring the write lock. This is the last
+      // point at which a pause/delete/retry can invalidate this worker.
+      query = await getCurrentQuery(queryId, generation, { tx });
+      if (!query) return null;
+      item = query.searchResults.find((result) => result.id === itemId);
+      if (!item || item.status !== "downloading") return null;
+
+      await fs.mkdir(getQueryDownloadDir(queryId), { recursive: true });
+
+      // A valid final file can be reused after a crash that happened between
+      // rename and the database commit. Otherwise rename is atomic within the
+      // same filesystem and replaces any invalid partial file.
+      if (await isValidPdfFile(finalPath)) {
+        await fs.rm(temporaryFilePath, { force: true });
+      } else {
+        await fs.rename(temporaryFilePath, finalPath);
+        moved = true;
+      }
+
+      const result = await completeSearchResult(itemId, { generation, tx });
+      if (!result) throw new Error("Download became stale before completion");
+      return result;
+    });
+
+    return completed;
+  } catch (error) {
+    if (moved) await fs.rm(finalPath, { force: true }).catch(() => null);
+    throw error;
+  }
 }
 
 export async function handleDownloadJobFailure(job, err) {
@@ -63,7 +165,10 @@ export async function handleDownloadJobFailure(job, err) {
   if (attempt >= MAX_DOWNLOAD_ATTEMPTS) {
     // A paused/deleted/superseded query or item fails this conditional
     // transition and therefore cannot be marked blocked by stale work.
-    await blockSearchResult(itemId, { generation }).catch(() => null);
+    await setSearchResultStatus(itemId, "download_blocked", {
+      generation,
+      expectedStatuses: ["pending", "downloading"],
+    }).catch(() => null);
   } else {
     const nextAttempt = attempt + 1;
     const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1), RETRY_MAX_DELAY_MS);
@@ -92,18 +197,24 @@ export async function handleDownloadJobFailure(job, err) {
   );
 }
 
-export async function handleDownloadJobCompleted(job) {
-  const identifiers = parseJobIdentifiers(job?.data, { itemRequired: true });
-  if (!identifiers) return;
+/**
+ * Completion is committed by processDownloadJob before BullMQ emits its
+ * completed event. Keeping this handler observational prevents a second,
+ * unvalidated state transition after the physical commit.
+ */
+export function handleDownloadJobCompleted(job) {
+  console.log(`[Download] Job ${job?.id} completed`);
+}
 
-  const { queryId, generation, itemId } = identifiers;
-  const query = await getCurrentQuery(queryId, generation);
-  const item = query?.searchResults.find((result) => result.id === itemId);
-  if (!query || !item) return;
+function getTemporaryDirectory(temporaryFilePath) {
+  return path.dirname(temporaryFilePath);
+}
 
-  // Completion is conditional on both lifecycle generation and the item still
-  // being downloading. Item pause/delete therefore rejects stale completion.
-  await completeSearchResult(itemId, { generation }).catch(() => null);
-
-  console.log(`[Download] Job ${job?.id} completed for ${item.fileName}`);
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }

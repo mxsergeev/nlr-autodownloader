@@ -117,14 +117,15 @@ export async function setSearchResultStatus(
  * the same transaction as parent reconciliation.
  *
  * @param {number} itemId
- * @param {{ generation?: number }} [options]
+ * @param {{ generation?: number, tx?: import("@prisma/client").Prisma.TransactionClient }} [options]
  * @returns {Promise<object|null>}
  */
-export function completeSearchResult(itemId, { generation } = {}) {
+export function completeSearchResult(itemId, { generation, tx } = {}) {
   return setSearchResultStatus(itemId, "completed", {
     generation,
     expectedStatuses: ["downloading"],
     lastAttempt: new Date(),
+    tx,
   });
 }
 

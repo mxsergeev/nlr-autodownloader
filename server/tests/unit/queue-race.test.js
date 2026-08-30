@@ -23,7 +23,7 @@ const lifecycle = vi.hoisted(() => ({
   isCurrentGeneration: vi.fn(),
 }));
 const file = vi.hoisted(() => ({
-  getDownloadedFileNames: vi.fn(),
+  getDownloadedFileIds: vi.fn(),
   verifyDownloads: vi.fn(),
 }));
 
@@ -61,7 +61,7 @@ describe("queue final generation barriers", () => {
     queues.searchQueue.add.mockResolvedValue(undefined);
     queues.downloadQueue.add.mockResolvedValue(undefined);
     queues.downloadQueue.addBulk.mockResolvedValue(undefined);
-    file.getDownloadedFileNames.mockResolvedValue(new Set());
+    file.getDownloadedFileIds.mockResolvedValue(new Set());
     file.verifyDownloads.mockImplementation((_downloads, searchResults) => ({
       missingFiles: searchResults,
     }));
@@ -92,7 +92,7 @@ describe("queue final generation barriers", () => {
   });
 
   it("does not create bulk download work if invalidation wins after file inspection", async () => {
-    file.getDownloadedFileNames.mockImplementation(async () => {
+    file.getDownloadedFileIds.mockImplementation(async () => {
       generationValid = false;
       return new Set();
     });

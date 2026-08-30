@@ -76,8 +76,8 @@ export async function queueQuery(params, { order = 0 } = {}) {
 /**
  * Removes a query. Logical invalidation is committed before queue/file
  * cleanup, so active workers can only observe a missing query after this
- * operation succeeds. Filesystem cleanup remains the package-3 behaviour;
- * atomic temp/final-write protection belongs to package 4.
+ * operation succeeds. Filesystem cleanup remains separate from logical state;
+ * active download finalization is generation- and transaction-guarded.
  *
  * @param {{ id: number }} params
  * @param {{ removeDownloads?: boolean }} [options]
@@ -401,7 +401,7 @@ export async function removeItem(queryId, itemId) {
   await deleteSearchResultAndReconcile(resultId, { invalidateGeneration: true });
 
   try {
-    await deleteDownloadedFile(id, item.fileName);
+    await deleteDownloadedFile(id, item.id);
   } catch (err) {
     console.warn(`Could not delete file for item ${resultId}:`, err.message);
   }

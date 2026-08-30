@@ -9,7 +9,12 @@ import {
   toggleItemPause,
   removeItem,
 } from "../services/query.service.js";
-import { createZipStream, findDownloadedFile } from "../services/file.service.js";
+import {
+  createZipStream,
+  findDownloadedFile,
+  getDisplayFileName,
+  getValidCompletedItems,
+} from "../services/file.service.js";
 
 const router = express.Router();
 
@@ -141,11 +146,12 @@ router.get("/queue/:id/download", async (req, res) => {
         .status(409)
         .json({ error: "Download in progress. Pause or wait for it to complete." });
     }
-    if (!item.downloaded || item.downloaded === 0) {
+    const completedItems = await getValidCompletedItems(item.id, item.searchResults ?? []);
+    if (completedItems.length === 0) {
       return res.status(404).json({ error: "No files have been downloaded yet." });
     }
 
-    const zipStream = createZipStream(item.id);
+    const zipStream = await createZipStream(item.id, completedItems);
     res.setHeader("Content-Disposition", `attachment; filename="query-${id}.zip"`);
     res.setHeader("Content-Type", "application/zip");
     zipStream.on("error", (err) => {
@@ -172,13 +178,12 @@ router.get("/queue/:id/items/:itemId/download", async (req, res) => {
       return res.status(409).json({ error: "File has not been downloaded yet." });
     }
 
-    const filePath = await findDownloadedFile(Number(id), item.fileName);
+    const filePath = await findDownloadedFile(Number(id), item.id);
     if (!filePath) {
       return res.status(404).json({ error: "File not found on disk." });
     }
 
-    const ext = filePath.split(".").pop();
-    const filename = `${item.fileName}${ext ? `.${ext}` : ""}`;
+    const filename = getDisplayFileName(item);
     res.setHeader(
       "Content-Disposition",
       `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`

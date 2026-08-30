@@ -95,14 +95,15 @@ export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } 
 }
 
 /**
- * Downloads a single document PDF to the given storage directory.
+ * Downloads a single document PDF to the given global temporary path.
  * Throws 'Download blocked' if the download button is inaccessible.
  * @param {{ href: string, fileName: string }} item
- * @param {string} storageDir  Absolute path to the directory where the PDF will be saved.
+ * @param {string} temporaryFilePath Absolute path in the global temporary area.
+ * @returns {Promise<string>} The temporary file path.
  */
-export async function scrapeDownload(item, storageDir) {
+export async function scrapeDownload(item, temporaryFilePath) {
   return runJob(async (page) => {
-    await fs.mkdir(storageDir, { recursive: true });
+    await fs.mkdir(path.dirname(temporaryFilePath), { recursive: true });
 
     if (DOWNLOAD_START_JITTER_MS > 0) {
       await page.waitForTimeout(Math.floor(Math.random() * DOWNLOAD_START_JITTER_MS));
@@ -137,14 +138,14 @@ export async function scrapeDownload(item, storageDir) {
         throw new Error("Download blocked: no download event received within timeout");
       }
 
-      const fileName = sanitizeFileName(item.fileName);
-      const filePath = path.join(storageDir, `${fileName}.pdf`);
-      await file.saveAs(filePath);
-      await fs.chmod(filePath, 0o664);
+      await file.saveAs(temporaryFilePath);
+      await fs.chmod(temporaryFilePath, 0o664);
     } finally {
       if (page2) await page2.close();
       if (page1) await page1.close();
     }
+
+    return temporaryFilePath;
   });
 }
 

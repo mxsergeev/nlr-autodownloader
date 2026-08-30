@@ -6,6 +6,7 @@ import {
 import { getSearchResults, saveSearchResults } from "../../services/db.service.js";
 import { addDownloadJobBulk } from "../../queues/download.queue.js";
 import { reconcileQueryState, setSearchResultStatus } from "../../services/query-state.service.js";
+import { getDownloadedFileIds } from "../../services/file.service.js";
 import {
   getCurrentQuery,
   isCurrentGeneration,
@@ -103,11 +104,13 @@ export async function processSearchJob(job) {
   });
 
   if (!hasJobs) {
-    // Existing files are the package-3-era physical shortcut. Mark rows
-    // complete through generation-aware state transitions so a pause cannot
-    // turn this stale shortcut into a DB commit.
+    // Existing files are a physical shortcut only when they are valid PDFs
+    // with canonical SearchResult-ID names. Legacy title-based files and
+    // partial/HTML files must never turn a row into completed.
+    const downloads = await getDownloadedFileIds({ id: queryId });
     for (const item of results) {
       if (["paused", "download_blocked"].includes(item.status)) continue;
+      if (!downloads.has(String(item.id))) continue;
       if (!(await isCurrentGeneration(queryId, generation))) return null;
       if (!(await setSearchResultStatus(item.id, "completed", { generation }))) return null;
     }

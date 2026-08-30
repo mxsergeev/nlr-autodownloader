@@ -1,7 +1,7 @@
 import { downloadQueue } from "../queue.js";
 import { getMetadata } from "../services/db.service.js";
 import { getCurrentQuery, isCurrentGeneration } from "../services/query-generation.service.js";
-import { getDownloadedFileNames, verifyDownloads } from "../services/file.service.js";
+import { getDownloadedFileIds, verifyDownloads } from "../services/file.service.js";
 
 /**
  * Queues download jobs for all search result items whose file does not yet exist on disk.
@@ -35,7 +35,7 @@ export async function addDownloadJobBulk({
     (item) => (!requestedIds || requestedIds.has(item.id)) && item.status === "pending"
   );
 
-  const downloads = await getDownloadedFileNames(current);
+  const downloads = await getDownloadedFileIds(current);
   const { missingFiles } = verifyDownloads(downloads, currentItems);
 
   if (missingFiles.length === 0) {
