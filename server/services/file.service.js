@@ -2,13 +2,14 @@ import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import archiver from "archiver";
+import { downloadsDir } from "../config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DATA_DIR = path.join(__dirname, "..", "..", "data");
 await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o775 });
 
-export const DOWNLOADS_DIR = path.join(DATA_DIR, "downloads");
+export const DOWNLOADS_DIR = downloadsDir;
 await fs.mkdir(DOWNLOADS_DIR, { recursive: true, mode: 0o775 });
 
 /**

@@ -1,7 +1,8 @@
 import { firefox } from "playwright";
 import UserAgent from "user-agents";
+import { config } from "../config.js";
 
-const MAX_BROWSER_CONTEXTS = parseInt(process.env.MAX_BROWSER_CONTEXTS || "3", 10);
+const MAX_BROWSER_CONTEXTS = config.maxBrowserContexts;
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -52,17 +53,9 @@ async function startBrowser() {
     await stopBrowser();
   }
 
-  let headless;
-
-  if (process.env.PLAYWRIGHT_HEADLESS !== undefined) {
-    headless = process.env.PLAYWRIGHT_HEADLESS === "true";
-  } else {
-    headless = true;
-  }
-
   // Firefox is much more consistent in headless mode than Chromium
   browser = await firefox.launch({
-    headless,
+    headless: config.playwrightHeadless,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
 }

@@ -1,9 +1,10 @@
 import app from "./app.js";
+import { config } from "./config.js";
 import "./workers/metadata.worker.js";
 import "./workers/search.worker.js";
 import "./workers/download.worker.js";
 
-const port = process.env.SERVER_PORT || 3333;
+const port = config.serverPort;
 
 // Set umask to allow group write permissions for created files and directories
 process.umask(0o002);

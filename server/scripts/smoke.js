@@ -1,14 +1,14 @@
-import fetch from "node-fetch";
 import Redis from "ioredis";
+import { config } from "../config.js";
 import { redisOptions } from "../redis.js";
 
 const connection = new Redis(redisOptions);
 
-const SERVER_URL = `http://localhost:${process.env.SERVER_PORT || 3333}`;
+const SERVER_URL = `http://localhost:${config.serverPort}`;
 
 async function checkHttp() {
   try {
-    const res = await fetch(`${SERVER_URL}/health`, { timeout: 5000 });
+    const res = await fetch(`${SERVER_URL}/health`, { signal: AbortSignal.timeout(5000) });
     if (res.status !== 200) {
       console.error("Health endpoint returned", res.status);
       return false;

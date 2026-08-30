@@ -2,9 +2,10 @@ import { promises as fs } from "fs";
 import path from "path";
 import { runJob } from "./browser.service.js";
 import { sanitizeFileName } from "./file.service.js";
+import { config } from "../config.js";
 
-const SCRAPE_PAGE_DELAY_MS = parseInt(process.env.SCRAPE_PAGE_DELAY_MS || "1200", 10);
-const DOWNLOAD_START_JITTER_MS = parseInt(process.env.DOWNLOAD_START_JITTER_MS || "1500", 10);
+const SCRAPE_PAGE_DELAY_MS = config.scrapePageDelayMs;
+const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
 
 /**
  * Scrapes query metadata (result count, pagination) from a Primo result page.
