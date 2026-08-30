@@ -63,8 +63,27 @@ Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_dat
   ```bash
   docker compose exec server npm run smoke
   docker compose exec server npm run lint
+  docker compose exec server npm run db:migrate
   docker compose exec server npm run db:migrate:dev
   ```
+
+### Database migrations
+
+Use `npm run db:migrate` for deployments and startup migration checks. On a
+fresh SQLite database it runs the tracked baseline and query-lifecycle
+migrations with `prisma migrate deploy`. On a database created by an older
+release with `prisma db push`, it verifies the expected `Query` and
+`SearchResult` schema, records the existing schema as the tracked baseline,
+and applies the lifecycle-column migration without recreating application
+rows. A database that already has both lifecycle columns is adopted as having
+both migrations applied.
+
+The wrapper refuses incomplete or incompatible legacy schemas instead of
+guessing or rewriting them. Back up an existing database before upgrading;
+resolve such a schema deliberately before retrying. `npm run db:migrate:deploy`
+is available for databases that already have normal Prisma migration history.
+The Compose startup command should run `npm run db:migrate` before the server
+workers start; `db:push` is not a production deployment mechanism.
 
 ## Environment variables
 

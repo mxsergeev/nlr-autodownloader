@@ -3,6 +3,8 @@ export function makeQueryFixture(overrides = {}) {
     pageUrl: "https://primo.nlr.ru/discovery/search?query=any,contains,example",
     searchUrl: "https://primo.nlr.ru/discovery/search?query=any,contains,example",
     status: "pending",
+    generation: 1,
+    resumeStatus: null,
     results: null,
     resultsPerPart: null,
     parts: null,

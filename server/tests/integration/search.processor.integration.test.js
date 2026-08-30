@@ -41,17 +41,17 @@ describe("search processor integration", () => {
     scrapeSearchResults.mockResolvedValue(scrapedResults);
     addDownloadJobBulk.mockResolvedValue(true);
 
-    await processSearchJob({ id: "search-1", data: { metadata: { ...fixture, id: query.id } } });
+    await processSearchJob({
+      id: "search-1",
+      data: { queryId: query.id, generation: query.generation },
+    });
 
     const persistedQuery = await getMetadataById(query.id);
     expect(persistedQuery.status).toBe("download_queued");
     expect(persistedQuery.searchResults).toHaveLength(2);
     expect(addDownloadJobBulk).toHaveBeenCalledWith({
-      metadata: expect.objectContaining({ id: query.id }),
-      searchResults: expect.arrayContaining([
-        expect.objectContaining({ href: "https://primo.nlr.ru/first" }),
-        expect.objectContaining({ href: "https://primo.nlr.ru/second" }),
-      ]),
+      queryId: query.id,
+      generation: query.generation,
     });
   });
 
@@ -75,19 +75,20 @@ describe("search processor integration", () => {
 
     const processing = processSearchJob({
       id: "search-paused",
-      data: { metadata: { ...fixture, id: query.id } },
+      data: { queryId: query.id, generation: query.generation },
     });
 
     await scrapeStarted.promise;
-    await upsertMetadata({ id: query.id }, { status: "paused" });
+    await upsertMetadata(
+      { id: query.id },
+      { status: "paused", generation: query.generation + 1, resumeStatus: "fetching_results" }
+    );
     releaseScrape.resolve(scrapedResults);
     await processing;
 
     const persistedQuery = await getMetadataById(query.id);
     expect(persistedQuery.status).toBe("paused");
-    expect(persistedQuery.searchResults).toEqual([
-      expect.objectContaining({ href: "https://primo.nlr.ru/paused" }),
-    ]);
+    expect(persistedQuery.searchResults).toEqual([]);
     expect(addDownloadJobBulk).not.toHaveBeenCalled();
   });
 });

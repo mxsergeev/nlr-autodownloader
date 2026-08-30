@@ -26,6 +26,8 @@ await setupPrisma.$executeRawUnsafe(
     "pageUrl" TEXT NOT NULL,
     "searchUrl" TEXT,
     "status" TEXT NOT NULL DEFAULT 'pending',
+    "generation" INTEGER NOT NULL DEFAULT 1,
+    "resumeStatus" TEXT,
     "results" INTEGER,
     "resultsPerPart" INTEGER,
     "parts" INTEGER,

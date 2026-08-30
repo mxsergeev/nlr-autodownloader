@@ -10,20 +10,27 @@ import { prisma } from "./db.service.js";
  *
  * @param {import("@prisma/client").Prisma.TransactionClient} tx
  * @param {number} queryId
- * @param {{ lastAttempt?: Date }} [options]
+ * @param {{ lastAttempt?: Date, generation?: number, allowPaused?: boolean }} [options]
  * @returns {Promise<object|null>}
  */
-export async function reconcileQueryStateInTransaction(tx, queryId, { lastAttempt } = {}) {
+export async function reconcileQueryStateInTransaction(
+  tx,
+  queryId,
+  { lastAttempt, generation, allowPaused = false } = {}
+) {
   const query = await tx.query.findUnique({
     where: { id: Number(queryId) },
     select: {
       id: true,
+      generation: true,
       status: true,
       searchResults: { select: { status: true } },
     },
   });
 
   if (!query) return null;
+  if (generation != null && Number(query.generation) !== Number(generation)) return null;
+  if (generation != null && !allowPaused && query.status === "paused") return null;
 
   const statuses = query.searchResults.map((result) => result.status);
   const results = statuses.length;
@@ -49,10 +56,11 @@ export async function reconcileQueryStateInTransaction(tx, queryId, { lastAttemp
  * Reconciles one query in a single Prisma transaction.
  *
  * @param {number} queryId
+ * @param {{ generation?: number, allowPaused?: boolean }} [options]
  * @returns {Promise<object|null>}
  */
-export async function reconcileQueryState(queryId) {
-  return prisma.$transaction((tx) => reconcileQueryStateInTransaction(tx, queryId));
+export async function reconcileQueryState(queryId, options = {}) {
+  return prisma.$transaction((tx) => reconcileQueryStateInTransaction(tx, queryId, options));
 }
 
 /**
@@ -63,24 +71,42 @@ export async function reconcileQueryState(queryId) {
  *
  * @param {number} itemId
  * @param {string} status
- * @param {{ lastAttempt?: Date, tx?: import("@prisma/client").Prisma.TransactionClient }} [options]
+ * @param {{ lastAttempt?: Date, generation?: number, expectedStatuses?: string[], tx?: import("@prisma/client").Prisma.TransactionClient }} [options]
  * @returns {Promise<object|null>}
  */
-export async function setSearchResultStatus(itemId, status, { lastAttempt, tx } = {}) {
+export async function setSearchResultStatus(
+  itemId,
+  status,
+  { lastAttempt, generation, expectedStatuses, tx } = {}
+) {
   const transition = async (transaction) => {
     const item = await transaction.searchResult.findUnique({
       where: { id: Number(itemId) },
-      select: { queryId: true },
+      select: { queryId: true, status: true },
     });
 
     if (!item) return null;
+
+    if (expectedStatuses && !expectedStatuses.includes(item.status)) return null;
+
+    const query = await transaction.query.findUnique({
+      where: { id: item.queryId },
+      select: { generation: true, status: true },
+    });
+
+    if (!query) return null;
+    if (generation != null && Number(query.generation) !== Number(generation)) return null;
+    if (generation != null && query.status === "paused") return null;
 
     await transaction.searchResult.update({
       where: { id: Number(itemId) },
       data: { status },
     });
 
-    return reconcileQueryStateInTransaction(transaction, item.queryId, { lastAttempt });
+    return reconcileQueryStateInTransaction(transaction, item.queryId, {
+      lastAttempt,
+      generation,
+    });
   };
 
   return tx ? transition(tx) : prisma.$transaction(transition);
@@ -91,10 +117,15 @@ export async function setSearchResultStatus(itemId, status, { lastAttempt, tx } 
  * the same transaction as parent reconciliation.
  *
  * @param {number} itemId
+ * @param {{ generation?: number }} [options]
  * @returns {Promise<object|null>}
  */
-export function completeSearchResult(itemId) {
-  return setSearchResultStatus(itemId, "completed", { lastAttempt: new Date() });
+export function completeSearchResult(itemId, { generation } = {}) {
+  return setSearchResultStatus(itemId, "completed", {
+    generation,
+    expectedStatuses: ["downloading"],
+    lastAttempt: new Date(),
+  });
 }
 
 /**
@@ -102,10 +133,15 @@ export function completeSearchResult(itemId) {
  * parent atomically.
  *
  * @param {number} itemId
+ * @param {{ generation?: number }} [options]
  * @returns {Promise<object|null>}
  */
-export function blockSearchResult(itemId) {
-  return setSearchResultStatus(itemId, "download_blocked", { lastAttempt: new Date() });
+export function blockSearchResult(itemId, { generation } = {}) {
+  return setSearchResultStatus(itemId, "download_blocked", {
+    generation,
+    expectedStatuses: ["pending", "downloading"],
+    lastAttempt: new Date(),
+  });
 }
 
 /**
@@ -113,9 +149,13 @@ export function blockSearchResult(itemId) {
  * deletion remains outside this logical-state transaction.
  *
  * @param {number} itemId
+ * @param {{ invalidateGeneration?: boolean }} [options]
  * @returns {Promise<object|null>}
  */
-export async function deleteSearchResultAndReconcile(itemId) {
+export async function deleteSearchResultAndReconcile(
+  itemId,
+  { invalidateGeneration = false } = {}
+) {
   return prisma.$transaction(async (tx) => {
     const item = await tx.searchResult.findUnique({
       where: { id: Number(itemId) },
@@ -123,6 +163,13 @@ export async function deleteSearchResultAndReconcile(itemId) {
     });
 
     if (!item) return null;
+
+    if (invalidateGeneration) {
+      await tx.query.update({
+        where: { id: item.queryId },
+        data: { generation: { increment: 1 } },
+      });
+    }
 
     await tx.searchResult.delete({ where: { id: Number(itemId) } });
     return reconcileQueryStateInTransaction(tx, item.queryId);

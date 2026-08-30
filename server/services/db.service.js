@@ -103,13 +103,30 @@ export async function getSearchResults({ queryId } = {}) {
  * @param {{ queryId: number }} params
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
-export async function saveSearchResults({ queryId }, results) {
+export async function saveSearchResults({ queryId, generation }, results) {
   const hrefs = results.map((r) => r.href);
+  let saved = false;
 
   // Interactive transaction: delete removed items, then insert only new ones.
   // We pre-filter existing hrefs manually because $transaction array mode does not
   // support createMany({ skipDuplicates }) for SQLite in Prisma 6.
   await prisma.$transaction(async (tx) => {
+    const query = await tx.query.findUnique({
+      where: { id: Number(queryId) },
+      select: { generation: true, status: true },
+    });
+
+    // Generation-aware callers must never let a paused or superseded scrape
+    // recreate SearchResult rows. Legacy callers (without generation) retain
+    // the database service's original behaviour for characterization tests.
+    if (
+      !query ||
+      (generation != null &&
+        (Number(query.generation) !== Number(generation) || query.status === "paused"))
+    ) {
+      return;
+    }
+
     const existing = await tx.searchResult.findMany({
       where: { queryId: Number(queryId), href: { in: hrefs } },
       select: { href: true },
@@ -131,18 +148,22 @@ export async function saveSearchResults({ queryId }, results) {
         })),
       });
     }
+
+    // Keep display metadata in the same transaction as insertion/deletion so
+    // a lifecycle invalidation cannot leave a partial stale scrape behind.
+    await Promise.all(
+      results.map((r) =>
+        tx.searchResult.updateMany({
+          where: { queryId: Number(queryId), href: r.href },
+          data: { title: r.title, fileName: r.fileName },
+        })
+      )
+    );
+
+    saved = true;
   });
 
-  // Update title/fileName for records that already existed (status is intentionally preserved).
-  // This is done outside the transaction to avoid N individual statements inside it.
-  await Promise.all(
-    results.map((r) =>
-      prisma.searchResult.updateMany({
-        where: { queryId: Number(queryId), href: r.href },
-        data: { title: r.title, fileName: r.fileName },
-      })
-    )
-  );
+  return saved;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +178,7 @@ export async function saveSearchResults({ queryId }, results) {
 export async function getQueryStats(id) {
   return prisma.query.findUnique({
     where: { id: Number(id) },
-    select: { id: true, status: true, results: true },
+    select: { id: true, status: true, results: true, generation: true, resumeStatus: true },
   });
 }
 
@@ -180,6 +201,8 @@ function normalize(metadata) {
   if ("order" in metadata)
     result.order = metadata.order != null ? BigInt(metadata.order) : undefined;
   if ("status" in metadata) result.status = metadata.status;
+  if ("generation" in metadata) result.generation = Number(metadata.generation);
+  if ("resumeStatus" in metadata) result.resumeStatus = metadata.resumeStatus ?? null;
   if ("lastAttempt" in metadata)
     result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null;
   if ("warnings" in metadata) result.warnings = metadata.warnings ?? null;

@@ -48,8 +48,8 @@ router.post("/queue", async (req, res) => {
       if (!q.url) {
         return Promise.reject(new Error(`Query at index ${index} is missing 'url' field`));
       }
-      await queueQuery({ url: q.url }, { order: index });
-      return addMetadataJob({ url: q.url });
+      const query = await queueQuery({ url: q.url }, { order: index });
+      return addMetadataJob({ queryId: query.id, generation: query.generation });
     });
 
     const qsResults = await Promise.allSettled(ops);
@@ -100,6 +100,7 @@ router.post("/queue/:id/pause", async (req, res) => {
     res.json(result);
   } catch (error) {
     if (error.code === "NOT_FOUND") return res.status(404).json({ error: error.message });
+    if (error.code === "NOT_PAUSABLE") return res.status(400).json({ error: error.message });
     console.error("Query pause error:", error);
     res.status(500).json({ error: "Failed to pause query", message: error.message });
   }
