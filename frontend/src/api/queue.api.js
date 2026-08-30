@@ -5,7 +5,11 @@ export const fetchQueue = () => axios.get("/api/queue").then((r) => r.data.queue
 
 /**
  * @param {string} url
- * @returns {Promise<{ failed: any[], queue: import('../../../shared/types.js').Query[] }>}
+ * @returns {Promise<{
+ *   queued: Array<{ url: string, id: number }>,
+ *   failed: Array<{ url: string|null, error: string }>,
+ *   queue: import('../../../shared/types.js').Query[]
+ * }>}
  */
 export const addQuery = (url) =>
   axios.post("/api/queue", { queries: [{ url }] }).then((r) => r.data);

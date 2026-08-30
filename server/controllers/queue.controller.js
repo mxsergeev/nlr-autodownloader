@@ -51,17 +51,25 @@ router.post("/queue", async (req, res) => {
 
     const ops = queries.map(async (q, index) => {
       if (!q.url) {
-        return Promise.reject(new Error(`Query at index ${index} is missing 'url' field`));
+        throw new Error(`Query at index ${index} is missing 'url' field`);
       }
       const query = await queueQuery({ url: q.url }, { order: index });
-      return addMetadataJob({ queryId: query.id, generation: query.generation });
+      await addMetadataJob({ queryId: query.id, generation: query.generation });
+      return { url: q.url, id: query.id };
     });
 
     const qsResults = await Promise.allSettled(ops);
     const queue = await getAllMetadata();
 
     res.json({
-      failed: qsResults.filter((r) => r.status === "rejected").map((r) => r.reason),
+      queued: qsResults.filter((r) => r.status === "fulfilled").map((r) => r.value),
+      failed: qsResults
+        .map((result, index) => ({ result, query: queries[index] }))
+        .filter(({ result }) => result.status === "rejected")
+        .map(({ result, query }) => ({
+          url: query?.url ?? null,
+          error: getErrorMessage(result.reason),
+        })),
       queue,
     });
   } catch (error) {
@@ -69,6 +77,12 @@ router.post("/queue", async (req, res) => {
     res.status(500).json({ error: "Queueing failed", message: error.message, name: error.name });
   }
 });
+
+function getErrorMessage(error) {
+  if (typeof error === "string") return error;
+  if (error?.message) return error.message;
+  return "Failed to queue query";
+}
 
 router.delete("/queue/:id", async (req, res) => {
   try {

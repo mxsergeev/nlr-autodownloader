@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Box,
+  Button,
   Card,
   CardContent,
   CircularProgress,
@@ -125,8 +126,11 @@ const ExpandButton = styled(IconButton, {
  *   isRetrying: boolean,
  *   isPausing: boolean,
  *   pausingItemId: number | null,
+ *   deletingItemId: number | null,
  *   onRequestDelete: (item: object) => void,
  *   onRetry: (item: object) => void,
+ *   onRetryPending: (url: string) => void,
+ *   onDismissPending: (url: string) => void,
  *   onPause: (id: number) => void,
  *   onPauseItem: (queryId: number, itemId: number) => void,
  *   onDeleteItem: (queryId: number, itemId: number) => void,
@@ -139,8 +143,11 @@ export default React.memo(function QueueItem({
   isRetrying,
   isPausing,
   pausingItemId,
+  deletingItemId,
   onRequestDelete,
   onRetry,
+  onRetryPending,
+  onDismissPending,
   onPause,
   onPauseItem,
   onDeleteItem,
@@ -156,7 +163,13 @@ export default React.memo(function QueueItem({
   // Eagerly fetch detail for active items (data changes frequently) so it's ready when the
   // Drawer opens. For terminal-state items, fetch on-demand when the Drawer is opened (P1).
   // Background polling activates only while the Drawer is open to keep document statuses fresh.
-  const { data: detail, isLoading: isDetailLoading } = useQuery({
+  const {
+    data: detail,
+    isLoading: isDetailLoading,
+    isError: isDetailError,
+    error: detailError,
+    refetch: refetchDetail,
+  } = useQuery({
     queryKey: ["queue-item", item.id],
     queryFn: () => fetchQueueItem(item.id),
     enabled: (ACTIVE_STATUSES.includes(status) || drawerOpen) && !!item.id && !item.isPending,
@@ -173,10 +186,14 @@ export default React.memo(function QueueItem({
   const resultsCount = searchResults?.length > 0 ? searchResults.length : (item.results ?? "N/A");
 
   const isPaused = status === "paused";
+  const isPendingLoading = item.isPending && item.pendingStatus === "loading";
   const canPause =
     ["pending", "fetching_results", "download_queued", "downloading"].includes(status) || isPaused;
-  const canRetry = RETRYABLE_STATUSES.includes(status);
-  const isActing = isDeleting || isRetrying || isPausing || item.isPending;
+  const canRetry = item.isPending
+    ? item.pendingStatus === "error"
+    : RETRYABLE_STATUSES.includes(status);
+  const canDismiss = item.isPending && item.pendingStatus === "error";
+  const isActing = isDeleting || isRetrying || isPausing || isPendingLoading;
 
   const isFailed = status === "search_failed" || status === "download_blocked";
   const lastAttempt = item.lastAttempt ? formatTimestamp(item.lastAttempt) : null;
@@ -203,8 +220,16 @@ export default React.memo(function QueueItem({
 
   const handleRetry = (e) => {
     e.stopPropagation();
-    if (!item?.id) return;
-    onRetry?.(item);
+    if (item.isPending) {
+      if (canRetry) onRetryPending?.(item.pageUrl);
+      return;
+    }
+    if (item?.id) onRetry?.(item);
+  };
+
+  const handleDismiss = (e) => {
+    e.stopPropagation();
+    if (canDismiss) onDismissPending?.(item.pageUrl);
   };
 
   const handlePause = (e) => {
@@ -254,6 +279,23 @@ export default React.memo(function QueueItem({
       setIsZipping(false);
     }
   };
+
+  const detailErrorMessage =
+    detailError?.response?.data?.error ||
+    detailError?.message ||
+    "Failed to load document details.";
+
+  const detailRetryButton = (
+    <Button
+      size="small"
+      onClick={(e) => {
+        e.stopPropagation();
+        refetchDetail();
+      }}
+    >
+      Retry
+    </Button>
+  );
 
   return (
     <Card
@@ -318,7 +360,7 @@ export default React.memo(function QueueItem({
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <StatusChip status={item.status} />
 
-            {canPause && (
+            {!item.isPending && canPause && (
               <Tooltip title={isPaused ? "Resume" : "Pause"}>
                 <IconButton
                   size="small"
@@ -340,7 +382,7 @@ export default React.memo(function QueueItem({
               <Tooltip title="Retry">
                 <IconButton
                   size="small"
-                  aria-label="Retry item"
+                  aria-label={item.isPending ? "Retry" : "Retry item"}
                   color="primary"
                   onClick={handleRetry}
                   disabled={isActing}
@@ -350,17 +392,33 @@ export default React.memo(function QueueItem({
               </Tooltip>
             )}
 
-            <Tooltip title="Delete">
-              <IconButton
-                size="small"
-                aria-label="Delete item"
-                color="error"
-                onClick={handleDelete}
-                disabled={isActing}
-              >
-                <DeleteRoundedIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
+            {item.isPending ? (
+              canDismiss && (
+                <Tooltip title="Dismiss">
+                  <IconButton
+                    size="small"
+                    aria-label="Dismiss"
+                    color="error"
+                    onClick={handleDismiss}
+                    disabled={isActing}
+                  >
+                    <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </Tooltip>
+              )
+            ) : (
+              <Tooltip title="Delete">
+                <IconButton
+                  size="small"
+                  aria-label="Delete item"
+                  color="error"
+                  onClick={handleDelete}
+                  disabled={isActing}
+                >
+                  <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
 
             {downloadedCount > 0 && (
               <Tooltip
@@ -424,6 +482,12 @@ export default React.memo(function QueueItem({
         {item.warnings && (
           <Alert severity="info" sx={{ mb: 1, fontSize: "0.85rem", whiteSpace: "pre-line" }}>
             {item.warnings}
+          </Alert>
+        )}
+
+        {isDetailError && !drawerOpen && (
+          <Alert severity="warning" sx={{ mb: 1, fontSize: "0.85rem" }} action={detailRetryButton}>
+            {detail ? "Document details could not be refreshed." : detailErrorMessage}
           </Alert>
         )}
 
@@ -570,7 +634,7 @@ export default React.memo(function QueueItem({
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
             <StatusChip status={item.status} />
 
-            {canPause && (
+            {!item.isPending && canPause && (
               <Tooltip title={isPaused ? "Resume" : "Pause"}>
                 <IconButton
                   size="small"
@@ -592,7 +656,7 @@ export default React.memo(function QueueItem({
               <Tooltip title="Retry">
                 <IconButton
                   size="small"
-                  aria-label="Retry item"
+                  aria-label={item.isPending ? "Retry" : "Retry item"}
                   color="primary"
                   onClick={handleRetry}
                   disabled={isActing}
@@ -602,17 +666,33 @@ export default React.memo(function QueueItem({
               </Tooltip>
             )}
 
-            <Tooltip title="Delete">
-              <IconButton
-                size="small"
-                aria-label="Delete item"
-                color="error"
-                onClick={handleDelete}
-                disabled={isActing}
-              >
-                <DeleteRoundedIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
+            {item.isPending ? (
+              canDismiss && (
+                <Tooltip title="Dismiss">
+                  <IconButton
+                    size="small"
+                    aria-label="Dismiss"
+                    color="error"
+                    onClick={handleDismiss}
+                    disabled={isActing}
+                  >
+                    <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </Tooltip>
+              )
+            ) : (
+              <Tooltip title="Delete">
+                <IconButton
+                  size="small"
+                  aria-label="Delete item"
+                  color="error"
+                  onClick={handleDelete}
+                  disabled={isActing}
+                >
+                  <DeleteRoundedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
 
             {downloadedCount > 0 && (
               <Tooltip
@@ -661,14 +741,20 @@ export default React.memo(function QueueItem({
           </Box>
         </Box>
         <Box sx={{ flex: 1, overflow: "hidden" }}>
+          {isDetailError && (
+            <Alert severity="warning" sx={{ m: 1, fontSize: "0.85rem" }} action={detailRetryButton}>
+              {detail ? "Document details could not be refreshed." : detailErrorMessage}
+            </Alert>
+          )}
           <DocumentList
             queryId={item.id}
             results={item.results}
             searchResults={searchResults}
-            isLoading={isDetailLoading && !detail}
+            isLoading={isDetailLoading && !detail && !isDetailError}
             onPauseItem={onPauseItem}
             onDeleteItem={onDeleteItem}
             pausingItemId={pausingItemId}
+            deletingItemId={deletingItemId}
           />
         </Box>
       </Drawer>

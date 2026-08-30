@@ -20,8 +20,11 @@ const baseProps = {
   isRetrying: false,
   isPausing: false,
   pausingItemId: null,
+  deletingItemId: null,
   onRequestDelete: vi.fn(),
   onRetry: vi.fn(),
+  onRetryPending: vi.fn(),
+  onDismissPending: vi.fn(),
   onPause: vi.fn(),
   onPauseItem: vi.fn(),
   onDeleteItem: vi.fn(),
@@ -57,7 +60,8 @@ describe("QueueItem behavior baseline", () => {
     );
   });
 
-  it("keeps retry and delete disabled for a failed optimistic row", () => {
+  it("exposes retry and dismiss controls for a failed optimistic row", async () => {
+    const user = userEvent.setup();
     render(
       <TestProviders>
         <QueueItem
@@ -67,6 +71,7 @@ describe("QueueItem behavior baseline", () => {
             pageUrl: "https://primo.nlr.ru/failed",
             status: "search_failed",
             isPending: true,
+            pendingStatus: "error",
             pendingError: "URL rejected",
             results: null,
             searchResults: [],
@@ -75,11 +80,14 @@ describe("QueueItem behavior baseline", () => {
       </TestProviders>
     );
 
-    expect(screen.getByRole("button", { name: "Retry item" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete item" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(baseProps.onRetryPending).toHaveBeenCalledWith("https://primo.nlr.ru/failed");
+    expect(baseProps.onDismissPending).toHaveBeenCalledWith("https://primo.nlr.ru/failed");
   });
 
-  it("does not surface detail-fetch errors in the current card UI", async () => {
+  it("surfaces detail-fetch errors and offers a retry", async () => {
     fetchQueueItem.mockRejectedValueOnce(new Error("detail service unavailable"));
     render(
       <TestProviders>
@@ -99,6 +107,7 @@ describe("QueueItem behavior baseline", () => {
 
     await waitFor(() => expect(fetchQueueItem).toHaveBeenCalledWith(8));
     expect(screen.getByText("primo.nlr.ru")).toBeInTheDocument();
-    expect(screen.queryByText("detail service unavailable")).not.toBeInTheDocument();
+    expect(await screen.findByText("detail service unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

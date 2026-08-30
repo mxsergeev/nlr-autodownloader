@@ -14,10 +14,10 @@ vi.mock("../api/queue.api.js", () => ({
   deleteItem: vi.fn(),
 }));
 
-describe("queue mutation behavior baseline", () => {
+describe("queue mutation behavior", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("characterizes whole-cache rollback losing a concurrent successful mutation", async () => {
+  it("does not roll back a concurrent successful mutation when another action fails", async () => {
     const queryClient = createTestQueryClient();
     queryClient.setQueryData(
       ["queue"],
@@ -38,9 +38,18 @@ describe("queue mutation behavior baseline", () => {
     });
 
     act(() => result.current.deleteMutation.mutate(1));
-    await waitFor(() => expect(queryClient.getQueryData(["queue"])).toHaveLength(1));
+    await waitFor(() => expect(deleteQuery).toHaveBeenCalledWith(1));
+    expect(queryClient.getQueryData(["queue"])).toEqual([
+      { id: 1, status: "completed" },
+      { id: 2, status: "pending" },
+    ]);
+
     act(() => result.current.pauseMutation.mutate(2));
-    await waitFor(() => expect(queryClient.getQueryData(["queue"])[0].status).toBe("paused"));
+    await waitFor(() => expect(pauseQuery).toHaveBeenCalledWith(2));
+    expect(queryClient.getQueryData(["queue"])).toEqual([
+      { id: 1, status: "completed" },
+      { id: 2, status: "pending" },
+    ]);
 
     await act(async () => {
       pauseRequest.resolve({ paused: true });
