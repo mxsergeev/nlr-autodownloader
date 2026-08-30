@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     setupFiles: ["./tests/setup.js"],
     include: ["tests/**/*.test.js"],
+    exclude: ["tests/live/**/*.test.js"],
     fileParallelism: false,
     pool: "forks",
   },

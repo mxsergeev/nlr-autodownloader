@@ -13,6 +13,7 @@
     "install-browsers": "npx playwright install firefox",
     "smoke": "node scripts/smoke.js",
     "test": "vitest run",
+    "test:live": "node scripts/run-live-nlr-tests.js",
     "test:watch": "vitest",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix",
