@@ -3,6 +3,7 @@ import path from "path";
 import { runJob } from "./browser.service.js";
 import { sanitizeFileName } from "./file.service.js";
 import { config } from "../config.js";
+import { validateFinalNavigation, validateNlrUrl, validateScrapedUrl } from "./url.service.js";
 
 const SCRAPE_PAGE_DELAY_MS = config.scrapePageDelayMs;
 const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
@@ -13,8 +14,10 @@ const DOWNLOAD_START_JITTER_MS = config.downloadStartJitterMs;
  * @returns {Promise<{ results: number, resultsPerPart: number, parts: number, pageUrl: string }>}
  */
 export async function scrapeMetadata({ url } = {}) {
+  const requestedUrl = validateNlrUrl(url, { label: "Metadata URL" });
+
   return runJob(async (page) => {
-    await page.goto(url);
+    await gotoAllowed(page, requestedUrl.href, "Metadata URL");
 
     const sortButton = page.getByRole("button", { name: "Сортировать по Релевантность" });
     const sortButtonExists = await sortButton.isVisible({ timeout: 3000 }).catch(() => false);
@@ -22,6 +25,7 @@ export async function scrapeMetadata({ url } = {}) {
     if (sortButtonExists) {
       await sortButton.click({ timeout: 5000 });
       await page.getByRole("option", { name: "Дата выхода периодики (по возр.)" }).click();
+      validateFinalNavigation(page, { label: "Metadata sort navigation URL" });
     }
 
     await page.waitForSelector(".item-title", { timeout: 15000 }).catch(() => {
@@ -35,7 +39,7 @@ export async function scrapeMetadata({ url } = {}) {
     const resultNumber = match ? parseInt(match[1], 10) : null;
     const resultsPerPart = await page.locator(".item-title").count();
     const parts = resultNumber ? Math.ceil(resultNumber / resultsPerPart) : 1;
-    const finalUrl = page.url();
+    const finalUrl = validateFinalNavigation(page, { label: "Metadata final URL" }).href;
 
     console.log(
       `[Metadata] Successfully scraped metadata: ${resultNumber} results, ${resultsPerPart} per page, ${parts} parts`
@@ -53,14 +57,18 @@ export async function scrapeMetadata({ url } = {}) {
  * @returns {Promise<{ title: string, href: string, fileName: string }[]>}
  */
 export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } = {}) {
+  const requestedUrl = validateNlrUrl(metadata.searchUrl || metadata.pageUrl, {
+    label: "Search URL",
+  });
+
   return runJob(async (page) => {
     const seenUrls = new Set(scrapedUrls);
     const results = [];
-    const baseUrl = new URL(metadata.searchUrl || metadata.pageUrl);
+    const baseUrl = new URL(requestedUrl.href);
 
     for (let curPart = 1; curPart <= (metadata.parts || 1); curPart++) {
       baseUrl.searchParams.set("offset", String((curPart - 1) * metadata.resultsPerPart));
-      await page.goto(baseUrl.toString());
+      await gotoAllowed(page, baseUrl.toString(), "Search page URL");
       await page.waitForSelector(".item-title", { timeout: 15000 });
 
       const headings = page.locator(".item-title");
@@ -73,9 +81,17 @@ export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } 
         });
       });
 
-      headingData.forEach((item) => {
+      for (const item of headingData) {
+        if (!item.href) continue;
+
+        // Validate links at the point they cross from page-controlled data
+        // into application-controlled download work. Relative links are
+        // resolved against the final URL of the page that contained them.
+        item.href = validateScrapedUrl(item.href, page.url(), {
+          label: "Scraped document URL",
+        }).href;
         item.fileName = sanitizeFileName(item.title);
-      });
+      }
 
       for (const item of headingData) {
         if (item.href && !seenUrls.has(item.href)) {
@@ -102,6 +118,8 @@ export async function scrapeSearchResults(metadata, { scrapedUrls = new Set() } 
  * @returns {Promise<string>} The temporary file path.
  */
 export async function scrapeDownload(item, temporaryFilePath) {
+  const requestedUrl = validateNlrUrl(item?.href, { label: "Document URL" });
+
   return runJob(async (page) => {
     await fs.mkdir(path.dirname(temporaryFilePath), { recursive: true });
 
@@ -112,12 +130,14 @@ export async function scrapeDownload(item, temporaryFilePath) {
     let page1 = null;
     let page2 = null;
     try {
-      await page.goto(item.href);
+      await gotoAllowed(page, requestedUrl.href, "Document URL");
       const page1Promise = page.waitForEvent("popup", { timeout: 15000 }).catch(() => null);
       await page.getByLabel("Электронная копия").click();
       page1 = await page1Promise;
       if (!page1) throw new Error("Download blocked: detail page popup did not open");
+      await waitForAllowedPage(page1, "Document popup URL");
       await page1.getByRole("link", { name: "Карточка" }).click();
+      await waitForAllowedPage(page1, "Document card URL");
       await page1.locator("#btn-download").click();
 
       const page2Promise = page1.waitForEvent("popup", { timeout: 30000 }).catch(() => null);
@@ -132,6 +152,7 @@ export async function scrapeDownload(item, temporaryFilePath) {
         });
 
       page2 = await page2Promise;
+      if (page2) await waitForAllowedPage(page2, "Download popup URL");
       const file = await downloadPromise;
 
       if (!file) {
@@ -147,6 +168,24 @@ export async function scrapeDownload(item, temporaryFilePath) {
 
     return temporaryFilePath;
   });
+}
+
+/**
+ * Navigates only to an allow-listed URL and verifies the URL after redirects
+ * have completed. Playwright follows redirects by default, so both checks
+ * are required.
+ */
+async function gotoAllowed(page, requestedUrl, label) {
+  validateNlrUrl(requestedUrl, { label });
+  await page.goto(requestedUrl);
+  validateFinalNavigation(page, { label: `Final ${label}` });
+}
+
+async function waitForAllowedPage(page, label) {
+  if (typeof page.waitForLoadState === "function") {
+    await page.waitForLoadState("domcontentloaded").catch(() => null);
+  }
+  validateFinalNavigation(page, { label });
 }
 
 /**

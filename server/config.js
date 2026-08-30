@@ -7,12 +7,28 @@
 function parseInteger(value, fallback) {
   if (!value) return fallback;
   const parsed = parseInt(value, 10);
-  return parsed;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseList(value, fallback) {
+  if (!value) return Object.freeze([...fallback]);
+
+  const values = value
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+
+  return Object.freeze(values.length > 0 ? values : [...fallback]);
 }
 
 export const config = Object.freeze({
   serverPort: process.env.SERVER_PORT || "3333",
   downloadsDir: process.env.DOWNLOADS_DIR || "/data/downloads",
+  downloadsHostDir: process.env.DOWNLOADS_HOST_DIR || "./data/downloads",
+  jsonBodyLimit: "32kb",
+  maxQueueBatchSize: parseInteger(process.env.MAX_QUEUE_BATCH_SIZE, 100),
+  readinessTimeoutMs: parseInteger(process.env.READINESS_TIMEOUT_MS, 1000),
+  allowedNlrHosts: parseList(process.env.NLR_ALLOWED_HOSTS, ["primo.nlr.ru"]),
   concurrentDownloads: parseInteger(process.env.CONCURRENT_DOWNLOADS, 2) || 1,
   maxDownloadAttempts: parseInteger(process.env.MAX_DOWNLOAD_ATTEMPTS, 10),
   retryBaseDelayMs: parseInteger(process.env.RETRY_BASE_DELAY_MS, 5000),

@@ -47,7 +47,7 @@ Main queues:
 - Health check: `http://localhost:${SERVER_PORT:-3333}/health`
 - Prisma Studio (development mode): `http://localhost:5555`
 
-Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_data`) and downloaded files are mounted to `${DOWNLOADS_DIR}` (default `./data/downloads`).
+Data is persisted in Docker volumes (`redis_data`, `queries_data`) and downloaded files are mounted from `${DOWNLOADS_HOST_DIR}` (default `./data/downloads`) to `/data/downloads` inside the server container.
 
 ## Development workflow
 
@@ -92,18 +92,21 @@ workers start; `db:push` is not a production deployment mechanism.
 | Variable               | Default                                                       | Description |
 | ---------------------- | ------------------------------------------------------------- | ----------- |
 | `NODE_ENV`             | `production`                                                  | Use `development` for hot reload and Prisma Studio in compose. |
-| `SERVER_PORT`          | `3333`                                                        | Express server port. |
-| `DOWNLOADS_DIR`        | `./data/downloads`                                            | Host directory mounted for downloaded files. |
+| `SERVER_PORT`          | `3333`                                                        | Host port mapped to the server container's internal port `3333`. |
+| `DOWNLOADS_HOST_DIR`   | `./data/downloads`                                            | Host directory mounted at the container path in `DOWNLOADS_DIR`. |
+| `DOWNLOADS_DIR`        | `/data/downloads`                                             | Download path used by Node inside the container. |
 | `CONCURRENT_DOWNLOADS` | `2`                                                           | Download worker concurrency. |
 | `PLAYWRIGHT_HEADLESS`  | `true` (implicit if unset)                                   | Set to `false` to run browser non-headless. |
+| `MAX_QUEUE_BATCH_SIZE` | `100`                                                         | Maximum number of query objects accepted by one queue request. |
+| `READINESS_TIMEOUT_MS` | `1000`                                                        | Timeout for each SQLite/Redis readiness check. |
 | `DATABASE_URL`         | `file:/data/queries/nlr.db`                                   | Prisma/SQLite database path (inside container). |
 
 ### Redis
 
 | Variable         | Default | Description |
 | ---------------- | ------- | ----------- |
-| `REDIS_HOST`     | `redis` | Redis host for BullMQ/ioredis. |
-| `REDIS_PORT`     | `6379`  | Redis port. |
+| `REDIS_HOST`     | `redis` | Redis host used inside the Compose network. |
+| `REDIS_PORT`     | `6379`  | Host port mapped to Redis's internal port `6379`; the server override always uses `6379` internally. |
 | `REDIS_PASSWORD` | `1234`  | Redis password. |
 | `REDIS_DB`       | `0`     | Redis database index. |
 
@@ -120,6 +123,11 @@ Returns:
 ```json
 { "status": "ok" }
 ```
+
+`GET /health/live` is a dependency-free liveness check. `GET /health/ready`
+returns `200` only when SQLite, Redis, and the configured downloads directory
+are available and writable; otherwise it returns `503` with per-dependency
+statuses.
 
 ### `GET /api/queue`
 

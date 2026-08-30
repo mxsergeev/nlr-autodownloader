@@ -15,6 +15,8 @@ import {
   getDisplayFileName,
   getValidCompletedItems,
 } from "../services/file.service.js";
+import { config } from "../config.js";
+import { validateNlrUrl } from "../services/url.service.js";
 
 const router = express.Router();
 
@@ -43,19 +45,28 @@ router.get("/queue/:id", async (req, res) => {
 
 router.post("/queue", async (req, res) => {
   try {
-    const { queries = [] } = req.body;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const { queries = [] } = body;
+
+    if (!Array.isArray(queries)) {
+      return res.status(400).json({ error: "'queries' must be an array" });
+    }
 
     if (queries.length === 0) {
       return res.status(400).json({ error: "No queries provided" });
     }
 
+    if (queries.length > config.maxQueueBatchSize) {
+      return res.status(413).json({
+        error: `A maximum of ${config.maxQueueBatchSize} queries can be queued at once`,
+      });
+    }
+
     const ops = queries.map(async (q, index) => {
-      if (!q.url) {
-        throw new Error(`Query at index ${index} is missing 'url' field`);
-      }
-      const query = await queueQuery({ url: q.url }, { order: index });
+      const url = validateNlrUrl(q?.url, { label: `Query at index ${index} URL` });
+      const query = await queueQuery({ url: url.href }, { order: index });
       await addMetadataJob({ queryId: query.id, generation: query.generation });
-      return { url: q.url, id: query.id };
+      return { url: url.href, id: query.id };
     });
 
     const qsResults = await Promise.allSettled(ops);

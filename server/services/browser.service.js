@@ -50,7 +50,7 @@ async function startBrowser() {
   if (browser && browser.isConnected()) return;
 
   if (browser) {
-    await stopBrowser();
+    await shutdownBrowser();
   }
 
   // Firefox is much more consistent in headless mode than Chromium
@@ -60,7 +60,11 @@ async function startBrowser() {
   });
 }
 
-async function stopBrowser() {
+/**
+ * Closes the shared browser instance. Process signal ownership belongs to the
+ * application lifecycle module so there is exactly one shutdown coordinator.
+ */
+export async function shutdownBrowser() {
   if (!browser) return;
   await browser.close().catch(() => {});
   browser = undefined;
@@ -97,7 +101,7 @@ export async function runJob(fn) {
       context = await browser.newContext(contextOptions);
     } catch {
       // try restarting once
-      await stopBrowser();
+      await shutdownBrowser();
       await startBrowser();
       context = await browser.newContext(contextOptions);
     }
@@ -112,10 +116,3 @@ export async function runJob(fn) {
     releaseSlot();
   }
 }
-
-async function gracefulShutdown() {
-  await stopBrowser();
-}
-
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
