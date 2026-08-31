@@ -3,6 +3,8 @@
  * @property {number} id
  * @property {string} pageUrl
  * @property {'pending'|'fetching_metadata'|'fetching_results'|'download_queued'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'} status
+ * @property {number} generation
+ * @property {'pending'|'fetching_metadata'|'fetching_results'|'download_queued'|'downloading'|'completed'|'download_blocked'|'search_failed'|'paused'|null} resumeStatus
  * @property {number|null} results
  * @property {number|null} resultsPerPart
  * @property {number|null} parts

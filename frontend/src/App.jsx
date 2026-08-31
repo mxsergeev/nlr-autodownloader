@@ -24,9 +24,10 @@ export default function App() {
   const [pendingJobs, setPendingJobs] = React.useState({}); // { url: { status: 'loading' | 'error', message? } }
 
   const {
-    data: queue = [],
+    data: queueData,
     isLoading,
     isError,
+    error: queueError,
   } = useQuery({
     queryKey: ["queue"],
     queryFn: fetchQueue,
@@ -38,9 +39,41 @@ export default function App() {
         : 3000,
   });
 
+  const queue = React.useMemo(() => queueData ?? [], [queueData]);
+  const hasCachedQueue = queueData !== undefined;
+
   const mutation = useMutation({
     mutationFn: (url) => addQuery(url),
-    onSuccess: (data) => {
+    onSuccess: (data, url) => {
+      const queued = Array.isArray(data?.queued) ? data.queued : [];
+      const failed = Array.isArray(data?.failed) ? data.failed : [];
+
+      setPendingJobs((prev) => {
+        const next = { ...prev };
+
+        // A successful submission is no longer provisional. Do not merely hide it
+        // behind the server queue: that would resurrect it if the real row later
+        // disappears.
+        const queuedUrls = queued.map((entry) => entry?.url).filter(Boolean);
+        if (queuedUrls.length > 0) {
+          queuedUrls.forEach((queuedUrl) => delete next[queuedUrl]);
+        } else if (failed.length === 0) {
+          delete next[url];
+        }
+
+        // A 200 response may still contain per-URL failures. Keep those rows
+        // visible and actionable instead of treating the whole request as a success.
+        failed.forEach((entry) => {
+          if (!entry?.url) return;
+          next[entry.url] = {
+            status: "error",
+            message: entry.error || "Failed to add URL",
+          };
+        });
+
+        return next;
+      });
+
       if (data?.queue) qc.setQueryData(["queue"], data.queue);
       qc.invalidateQueries({ queryKey: ["queue"] });
     },
@@ -60,6 +93,24 @@ export default function App() {
     mutation.mutate(url);
   };
 
+  const handleRetryPending = React.useCallback(
+    (url) => {
+      if (!url) return;
+      setPendingJobs((prev) => ({ ...prev, [url]: { status: "loading" } }));
+      mutation.mutate(url);
+    },
+    [mutation]
+  );
+
+  const handleDismissPending = React.useCallback((url) => {
+    if (!url) return;
+    setPendingJobs((prev) => {
+      const next = { ...prev };
+      delete next[url];
+      return next;
+    });
+  }, []);
+
   const queueUrls = React.useMemo(
     () => new Set(queue.map((item) => item.pageUrl).filter(Boolean)),
     [queue]
@@ -76,12 +127,17 @@ export default function App() {
       searchResults: [],
       createdAt: new Date(),
       isPending: true,
+      pendingStatus: state.status,
       pendingError: state.message,
     }));
-    const visiblePending = pending.filter((item) => !queueUrls.has(item.pageUrl));
+    const visiblePending = pending.filter(
+      (item) => item.pendingStatus === "error" || !queueUrls.has(item.pageUrl)
+    );
 
     return [...visiblePending, ...queue];
   }, [pendingJobs, queue, queueUrls]);
+
+  const hasQueueDataToRender = hasCachedQueue || displayQueue.length > 0;
 
   return (
     <Box
@@ -160,20 +216,35 @@ export default function App() {
         <Box sx={{ py: 4 }}>
           <AddQueryForm onSubmitUrl={handleAddUrl} isSubmitting={mutation.isPending} />
 
-          <Fade in={mutation.isSuccess} unmountOnExit>
+          <Fade in={mutation.isSuccess && mutation.data?.queued?.length > 0} unmountOnExit>
             <Alert severity="success" sx={{ mb: 2 }}>
               Query added to the queue.
             </Alert>
           </Fade>
 
-          {isLoading ? (
+          {isLoading && !hasQueueDataToRender ? (
             <Box sx={{ display: "flex", justifyContent: "center", pt: 6 }}>
               <CircularProgress size={32} thickness={3} />
             </Box>
-          ) : isError ? (
-            <Alert severity="error">Failed to load queue. Retrying…</Alert>
+          ) : isError && !hasQueueDataToRender ? (
+            <Alert severity="error">
+              {queueError?.response?.data?.error || queueError?.message || "Failed to load queue."}
+            </Alert>
           ) : (
-            <QueueList queue={displayQueue} />
+            <>
+              {isError && (
+                <Alert severity={hasCachedQueue ? "warning" : "error"} sx={{ mb: 2 }}>
+                  {hasCachedQueue
+                    ? "Unable to refresh the queue. Showing the last available data; retrying…"
+                    : "Unable to load the queue. Showing local submissions; retrying…"}
+                </Alert>
+              )}
+              <QueueList
+                queue={displayQueue}
+                onRetryPending={handleRetryPending}
+                onDismissPending={handleDismissPending}
+              />
+            </>
           )}
         </Box>
       </Container>

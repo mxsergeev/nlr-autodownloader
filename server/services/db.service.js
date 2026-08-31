@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { validatePrimoUrl } from "./url.service.js";
 
 export const prisma = new PrismaClient();
 
@@ -29,21 +30,27 @@ export async function getMetadata({ id, url }) {
 /**
  * Creates or updates the query record from a Prisma-shaped object.
  * @param {{ id?: number, url?: string }} params
- * @param {object} metadata  Prisma-compatible fields (results, resultsPerPart, parts, pageUrl, createdAt, order, status, lastAttempt, downloaded, downloadProgress)
+ * @param {object} metadata  Prisma-compatible metadata fields. Download
+ * counters/progress are derived by query-state.service.js.
  */
 export async function upsertMetadata({ id, url }, metadata) {
+  const validatedUrl = url == null ? null : validatePrimoUrl(url, { label: "Query URL" }).href;
   const data = normalize(metadata);
+  if (data.pageUrl != null)
+    data.pageUrl = validatePrimoUrl(data.pageUrl, { label: "Query page URL" }).href;
+  if (data.searchUrl != null)
+    data.searchUrl = validatePrimoUrl(data.searchUrl, { label: "Query search URL" }).href;
 
   if (id) {
     const record = await prisma.query.update({ where: { id: Number(id) }, data });
     return toSerializableQuery(record);
   }
 
-  if (url) {
+  if (validatedUrl) {
     // pageUrl is unique in the schema - use upsert by pageUrl
     const record = await prisma.query.upsert({
-      where: { pageUrl: url },
-      create: { pageUrl: url, ...data },
+      where: { pageUrl: validatedUrl },
+      create: { pageUrl: validatedUrl, ...data },
       update: data,
     });
     return toSerializableQuery(record);
@@ -102,19 +109,42 @@ export async function getSearchResults({ queryId } = {}) {
  * @param {{ queryId: number }} params
  * @param {{ title: string, href: string, fileName: string }[]} results
  */
-export async function saveSearchResults({ queryId }, results) {
-  const hrefs = results.map((r) => r.href);
+export async function saveSearchResults({ queryId, generation }, results) {
+  const normalizedResults = results.map((result, index) => ({
+    ...result,
+    href: validatePrimoUrl(result?.href, {
+      label: `Search result at index ${index} URL`,
+    }).href,
+  }));
+  const hrefs = normalizedResults.map((r) => r.href);
+  let saved = false;
 
   // Interactive transaction: delete removed items, then insert only new ones.
   // We pre-filter existing hrefs manually because $transaction array mode does not
   // support createMany({ skipDuplicates }) for SQLite in Prisma 6.
   await prisma.$transaction(async (tx) => {
+    const query = await tx.query.findUnique({
+      where: { id: Number(queryId) },
+      select: { generation: true, status: true },
+    });
+
+    // Generation-aware callers must never let a paused or superseded scrape
+    // recreate SearchResult rows. Legacy callers (without generation) retain
+    // the database service's original behaviour for characterization tests.
+    if (
+      !query ||
+      (generation != null &&
+        (Number(query.generation) !== Number(generation) || query.status === "paused"))
+    ) {
+      return;
+    }
+
     const existing = await tx.searchResult.findMany({
       where: { queryId: Number(queryId), href: { in: hrefs } },
       select: { href: true },
     });
     const existingHrefs = new Set(existing.map((r) => r.href));
-    const newResults = results.filter((r) => !existingHrefs.has(r.href));
+    const newResults = normalizedResults.filter((r) => !existingHrefs.has(r.href));
 
     await tx.searchResult.deleteMany({
       where: { queryId: Number(queryId), href: { notIn: hrefs } },
@@ -130,46 +160,22 @@ export async function saveSearchResults({ queryId }, results) {
         })),
       });
     }
+
+    // Keep display metadata in the same transaction as insertion/deletion so
+    // a lifecycle invalidation cannot leave a partial stale scrape behind.
+    await Promise.all(
+      normalizedResults.map((r) =>
+        tx.searchResult.updateMany({
+          where: { queryId: Number(queryId), href: r.href },
+          data: { title: r.title, fileName: r.fileName },
+        })
+      )
+    );
+
+    saved = true;
   });
 
-  // Update title/fileName for records that already existed (status is intentionally preserved).
-  // This is done outside the transaction to avoid N individual statements inside it.
-  await Promise.all(
-    results.map((r) =>
-      prisma.searchResult.updateMany({
-        where: { queryId: Number(queryId), href: r.href },
-        data: { title: r.title, fileName: r.fileName },
-      })
-    )
-  );
-}
-
-export async function updateSearchResult(id, data) {
-  await prisma.searchResult.update({ where: { id: Number(id) }, data });
-}
-
-/**
- * Atomically increments Query.downloaded by 1 and updates lastAttempt.
- * Returns the updated record fields needed for status computation.
- * Using an atomic DB increment avoids race conditions when multiple download
- * workers complete simultaneously.
- * @param {number} id
- * @returns {Promise<{ id: number, status: string, results: number|null, downloaded: number }>}
- */
-export async function incrementDownloaded(id) {
-  return prisma.query.update({
-    where: { id: Number(id) },
-    data: { downloaded: { increment: 1 }, lastAttempt: new Date() },
-    select: { id: true, status: true, results: true, downloaded: true },
-  });
-}
-
-/**
- * Deletes a single SearchResult by id.
- * @param {number} id
- */
-export async function deleteSearchResult(id) {
-  await prisma.searchResult.delete({ where: { id: Number(id) } });
+  return saved;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +190,7 @@ export async function deleteSearchResult(id) {
 export async function getQueryStats(id) {
   return prisma.query.findUnique({
     where: { id: Number(id) },
-    select: { id: true, status: true, results: true },
+    select: { id: true, status: true, results: true, generation: true, resumeStatus: true },
   });
 }
 
@@ -207,10 +213,10 @@ function normalize(metadata) {
   if ("order" in metadata)
     result.order = metadata.order != null ? BigInt(metadata.order) : undefined;
   if ("status" in metadata) result.status = metadata.status;
+  if ("generation" in metadata) result.generation = Number(metadata.generation);
+  if ("resumeStatus" in metadata) result.resumeStatus = metadata.resumeStatus ?? null;
   if ("lastAttempt" in metadata)
     result.lastAttempt = metadata.lastAttempt ? new Date(metadata.lastAttempt) : null;
-  if ("downloaded" in metadata) result.downloaded = metadata.downloaded ?? 0;
-  if ("downloadProgress" in metadata) result.downloadProgress = metadata.downloadProgress ?? null;
   if ("warnings" in metadata) result.warnings = metadata.warnings ?? null;
 
   return result;

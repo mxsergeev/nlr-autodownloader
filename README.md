@@ -47,7 +47,16 @@ Main queues:
 - Health check: `http://localhost:${SERVER_PORT:-3333}/health`
 - Prisma Studio (development mode): `http://localhost:5555`
 
-Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_data`) and downloaded files are mounted to `${DOWNLOADS_DIR}` (default `./data/downloads`).
+Data is persisted in Docker volumes (`redis_data`, `queries_data`) and downloaded files are mounted from `${DOWNLOADS_HOST_DIR}` (default `./data/downloads`) to `/data/downloads` inside the server container.
+
+### Security boundary
+
+Compose binds the server API to `127.0.0.1` by default and does not publish
+Redis to the host. The standalone server also listens on localhost unless
+`SERVER_HOST` is explicitly changed. This application intentionally has no
+authentication or rate limiting; if it is exposed beyond the local machine,
+put it behind an authenticated reverse proxy and an appropriate rate limiter
+or firewall.
 
 ## Development workflow
 
@@ -63,8 +72,27 @@ Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_dat
   ```bash
   docker compose exec server npm run smoke
   docker compose exec server npm run lint
+  docker compose exec server npm run db:migrate
   docker compose exec server npm run db:migrate:dev
   ```
+
+### Database migrations
+
+Use `npm run db:migrate` for deployments and startup migration checks. On a
+fresh SQLite database it runs the tracked baseline and query-lifecycle
+migrations with `prisma migrate deploy`. On a database created by an older
+release with `prisma db push`, it verifies the expected `Query` and
+`SearchResult` schema, records the existing schema as the tracked baseline,
+and applies the lifecycle-column migration without recreating application
+rows. A database that already has both lifecycle columns is adopted as having
+both migrations applied.
+
+The wrapper refuses incomplete or incompatible legacy schemas instead of
+guessing or rewriting them. Back up an existing database before upgrading;
+resolve such a schema deliberately before retrying. `npm run db:migrate:deploy`
+is available for databases that already have normal Prisma migration history.
+The Compose startup command should run `npm run db:migrate` before the server
+workers start; `db:push` is not a production deployment mechanism.
 
 ## Environment variables
 
@@ -73,18 +101,22 @@ Data is persisted in Docker volumes (`postgres_data`, `redis_data`, `queries_dat
 | Variable               | Default                                                       | Description |
 | ---------------------- | ------------------------------------------------------------- | ----------- |
 | `NODE_ENV`             | `production`                                                  | Use `development` for hot reload and Prisma Studio in compose. |
-| `SERVER_PORT`          | `3333`                                                        | Express server port. |
-| `DOWNLOADS_DIR`        | `./data/downloads`                                            | Host directory mounted for downloaded files. |
+| `SERVER_PORT`          | `3333`                                                        | Host port mapped to the server container's internal port `3333`. |
+| `SERVER_HOST`          | `127.0.0.1`                                                  | Listen address for standalone server runs; Compose overrides it for the container network. |
+| `DOWNLOADS_HOST_DIR`   | `./data/downloads`                                            | Host directory mounted at the container path in `DOWNLOADS_DIR`. |
+| `DOWNLOADS_DIR`        | `/data/downloads`                                             | Download path used by Node inside the container. |
 | `CONCURRENT_DOWNLOADS` | `2`                                                           | Download worker concurrency. |
 | `PLAYWRIGHT_HEADLESS`  | `true` (implicit if unset)                                   | Set to `false` to run browser non-headless. |
+| `MAX_QUEUE_BATCH_SIZE` | `100`                                                         | Maximum number of query objects accepted by one queue request. |
+| `READINESS_TIMEOUT_MS` | `1000`                                                        | Timeout for each SQLite/Redis readiness check. |
 | `DATABASE_URL`         | `file:/data/queries/nlr.db`                                   | Prisma/SQLite database path (inside container). |
 
 ### Redis
 
 | Variable         | Default | Description |
 | ---------------- | ------- | ----------- |
-| `REDIS_HOST`     | `redis` | Redis host for BullMQ/ioredis. |
-| `REDIS_PORT`     | `6379`  | Redis port. |
+| `REDIS_HOST`     | `redis` | Redis host used inside the Compose network. |
+| `REDIS_PORT`     | `6379`  | Redis service port inside the Compose network; Redis is not published to the host by default. |
 | `REDIS_PASSWORD` | `1234`  | Redis password. |
 | `REDIS_DB`       | `0`     | Redis database index. |
 
@@ -101,6 +133,11 @@ Returns:
 ```json
 { "status": "ok" }
 ```
+
+`GET /health/live` is a dependency-free liveness check. `GET /health/ready`
+returns `200` only when SQLite, Redis, and the configured downloads directory
+are available and writable; otherwise it returns `503` with per-dependency
+statuses.
 
 ### `GET /api/queue`
 
@@ -213,3 +250,38 @@ The smoke script checks:
 
 - `GET /health`
 - Redis `PING`
+
+### Live NLR selector gate
+
+The normal server test suite intentionally excludes the live NLR suite. The
+live suite is opt-in because it starts Firefox and makes real requests to the
+NLR Primo and Vivaldi services. It validates the metadata selector, first-page
+result-link selector, and URL allow-list after navigation. It discovers one
+known digitized Primo record and then downloads one complete PDF through the
+application scraper by following the record's actual Vivaldi viewer/details
+flow. It does not crawl the whole result set:
+
+```bash
+docker compose exec -e RUN_LIVE_NLR_TESTS=1 server npm run test:live
+```
+
+When running directly from the server directory, use
+`RUN_LIVE_NLR_TESTS=1 npm run test:live`.
+The default search URL targets the real digitized Primo record
+`07NLR_LMS022470404`. Override it with an already-known allowed Primo search
+page when needed:
+
+```bash
+NLR_LIVE_SEARCH_URL='https://primo.nlr.ru/primo-explore/search?query=any,contains,Pushkin' \
+  RUN_LIVE_NLR_TESTS=1 \
+  npm run test:live
+```
+
+The override must remain a Primo URL. The fixed download assertion uses the
+known record, so changing the search URL may make the discovery assertion fail
+if that record is not on the first result page.
+
+The gate reports an HTTP outage, rate limit, or unavailable network as a
+skipped live run. An available page with missing selectors or an invalid PDF
+remains a test failure. The test never queues jobs or writes to the normal
+download directory; its temporary PDF is removed after validation.

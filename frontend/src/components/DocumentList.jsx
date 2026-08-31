@@ -30,22 +30,31 @@ function DocumentRow({
   onPauseItem,
   onDeleteItem,
   pausingItemId,
+  deletingItemId,
 }) {
   const doc = documents[index];
   const isPaused = doc.status === "paused";
   const canPause = ["pending", "paused"].includes(doc.status);
   const canDownload = doc.status === "completed";
   const isPausing = pausingItemId === doc.id;
+  const isDeleting = deletingItemId === doc.id;
   const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState(null);
   const [isDownloading, setIsDownloading] = React.useState(false);
   const [downloadError, setDownloadError] = React.useState(null);
 
-  const handleCopyUrl = (e) => {
+  const handleCopyUrl = async (e) => {
     e.stopPropagation();
     if (!doc.href) return;
-    copyToClipboard(doc.href).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setCopyError(null);
+    try {
+      await copyToClipboard(doc.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      setCopied(false);
+      setCopyError(error?.message ? `Unable to copy URL: ${error.message}` : "Unable to copy URL.");
+    }
   };
 
   const handleDownload = async (e) => {
@@ -137,12 +146,17 @@ function DocumentRow({
               <IconButton
                 size="small"
                 color="error"
+                disabled={isDeleting}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteItem?.(queryId, doc.id, docLabel);
                 }}
               >
-                <DeleteRoundedIcon sx={{ fontSize: 14 }} />
+                {isDeleting ? (
+                  <CircularProgress size={14} />
+                ) : (
+                  <DeleteRoundedIcon sx={{ fontSize: 14 }} />
+                )}
               </IconButton>
             </Tooltip>
           </Box>
@@ -153,9 +167,10 @@ function DocumentRow({
           primary={
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, overflow: "hidden" }}>
               {doc.href && (
-                <Tooltip title={copied ? "Copied!" : "Copy URL"}>
+                <Tooltip title={copyError ?? (copied ? "Copied!" : "Copy URL")}>
                   <IconButton
                     size="small"
+                    aria-label={copyError ? "Copy URL failed" : "Copy URL"}
                     sx={{ p: 0.25, flexShrink: 0, color: "text.secondary" }}
                     onClick={handleCopyUrl}
                   >
@@ -181,6 +196,13 @@ function DocumentRow({
               </Tooltip>
             </Box>
           }
+          secondary={
+            copyError ? (
+              <Typography component="span" role="alert" variant="caption" color="error">
+                {copyError}
+              </Typography>
+            ) : null
+          }
         />
       </ListItem>
     </Box>
@@ -188,7 +210,16 @@ function DocumentRow({
 }
 
 // Module-level component — stable reference, receives data via rowProps from react-window.
-function Row({ index, style, documents, queryId, onPauseItem, onDeleteItem, pausingItemId }) {
+function Row({
+  index,
+  style,
+  documents,
+  queryId,
+  onPauseItem,
+  onDeleteItem,
+  pausingItemId,
+  deletingItemId,
+}) {
   return (
     <DocumentRow
       index={index}
@@ -198,6 +229,7 @@ function Row({ index, style, documents, queryId, onPauseItem, onDeleteItem, paus
       onPauseItem={onPauseItem}
       onDeleteItem={onDeleteItem}
       pausingItemId={pausingItemId}
+      deletingItemId={deletingItemId}
     />
   );
 }
@@ -214,6 +246,7 @@ function Row({ index, style, documents, queryId, onPauseItem, onDeleteItem, paus
  *   pausingItemId: number | null,
  *   onPauseItem: (queryId: number, itemId: number) => void,
  *   onDeleteItem: (queryId: number, itemId: number) => void,
+ *   deletingItemId: number | null,
  * }} props
  */
 function DocumentList({
@@ -224,6 +257,7 @@ function DocumentList({
   onPauseItem,
   onDeleteItem,
   pausingItemId,
+  deletingItemId,
 }) {
   const documents = React.useMemo(
     () => (Array.isArray(searchResults) ? searchResults : []),
@@ -247,8 +281,8 @@ function DocumentList({
   }, []);
 
   const rowProps = React.useMemo(
-    () => ({ documents, queryId, onPauseItem, onDeleteItem, pausingItemId }),
-    [documents, queryId, onPauseItem, onDeleteItem, pausingItemId]
+    () => ({ documents, queryId, onPauseItem, onDeleteItem, pausingItemId, deletingItemId }),
+    [documents, queryId, onPauseItem, onDeleteItem, pausingItemId, deletingItemId]
   );
 
   return (

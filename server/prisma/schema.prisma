@@ -24,6 +24,8 @@ model Query {
   pageUrl          String      @unique
   searchUrl        String?
   status           QueryStatus @default(pending)
+  generation       Int         @default(1)
+  resumeStatus     QueryStatus?
   results          Int?
   resultsPerPart   Int?
   parts            Int?

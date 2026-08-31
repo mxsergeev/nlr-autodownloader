@@ -6,15 +6,20 @@ import QueueItem from "./QueueItem";
 import { useQueueMutations } from "../hooks/useQueueMutations";
 
 /**
- * @param {{ queue: import('../../../shared/types.js').Query[] }} props
+ * @param {{
+ *   queue: import('../../../shared/types.js').Query[],
+ *   onRetryPending?: (url: string) => void,
+ *   onDismissPending?: (url: string) => void,
+ * }} props
  */
-export default function QueueList({ queue }) {
+export default function QueueList({ queue, onRetryPending, onDismissPending }) {
   const {
     deleteMutation,
     retryMutation,
     pauseMutation,
     pauseItemMutation,
     deleteItemMutation,
+    deletingItemId,
     snackbar,
     closeSnackbar,
   } = useQueueMutations();
@@ -40,20 +45,14 @@ export default function QueueList({ queue }) {
 
   const requestRetry = React.useCallback(
     (item) => {
-      setSelectedItem(item);
-      retryMutate(item.id, {
-        onSettled: () => setSelectedItem(null),
-      });
+      retryMutate(item.id);
     },
     [retryMutate]
   );
 
   const requestPause = React.useCallback(
     (id) => {
-      setSelectedItem({ id });
-      pauseMutate(id, {
-        onSettled: () => setSelectedItem(null),
-      });
+      pauseMutate(id);
     },
     [pauseMutate]
   );
@@ -141,12 +140,15 @@ export default function QueueList({ queue }) {
             key={item.id ?? item.pageUrl ?? `queue-item-${index}`}
             item={item}
             index={index}
-            isDeleting={deleteMutation.isPending && selectedItem?.id === item.id}
-            isRetrying={retryMutation.isPending && selectedItem?.id === item.id}
-            isPausing={pauseMutation.isPending && selectedItem?.id === item.id}
+            isDeleting={deleteMutation.isPending && deleteMutation.variables === item.id}
+            isRetrying={retryMutation.isPending && retryMutation.variables === item.id}
+            isPausing={pauseMutation.isPending && pauseMutation.variables === item.id}
             pausingItemId={pausingItemId}
+            deletingItemId={deletingItemId}
             onRequestDelete={requestDelete}
             onRetry={requestRetry}
+            onRetryPending={onRetryPending}
+            onDismissPending={onDismissPending}
             onPause={requestPause}
             onPauseItem={requestPauseItem}
             onDeleteItem={requestDeleteItem}

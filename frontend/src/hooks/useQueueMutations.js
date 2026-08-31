@@ -8,7 +8,9 @@ import { deleteQuery, retryQuery, pauseQuery, pauseItem, deleteItem } from "../a
 
 /**
  * Provides mutations for delete, retry, pause, and per-item actions, plus shared snackbar state.
- * All mutations update the cache optimistically and sync with the server via onSettled.
+ * Control mutations leave the queue cache untouched while the request is in flight. The server
+ * remains authoritative, and a successful/failed request is followed by a refetch. This avoids
+ * restoring an old whole-queue snapshot over a concurrent successful mutation.
  * @returns {{
  *   deleteMutation: import('@tanstack/react-query').UseMutationResult,
  *   retryMutation: import('@tanstack/react-query').UseMutationResult,
@@ -27,14 +29,7 @@ export function useQueueMutations() {
 
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteQuery(id),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ["queue"] });
-      const prev = qc.getQueryData(["queue"]);
-      qc.setQueryData(["queue"], (old) => old?.filter((q) => q.id !== id) ?? []);
-      return { prev };
-    },
-    onError: (err, _id, ctx) => {
-      qc.setQueryData(["queue"], ctx?.prev);
+    onError: (err) => {
       setSnackbar({
         open: true,
         message: err?.response?.data?.error || err?.message || "Failed to remove query",
@@ -49,17 +44,7 @@ export function useQueueMutations() {
 
   const retryMutation = useMutation({
     mutationFn: (id) => retryQuery(id),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ["queue"] });
-      const prev = qc.getQueryData(["queue"]);
-      qc.setQueryData(
-        ["queue"],
-        (old) => old?.map((q) => (q.id === id ? { ...q, status: "fetching_metadata" } : q)) ?? []
-      );
-      return { prev };
-    },
-    onError: (err, _id, ctx) => {
-      qc.setQueryData(["queue"], ctx?.prev);
+    onError: (err) => {
       setSnackbar({
         open: true,
         message: err?.response?.data?.error || err?.message || "Failed to retry query",
@@ -77,27 +62,7 @@ export function useQueueMutations() {
 
   const pauseMutation = useMutation({
     mutationFn: (id) => pauseQuery(id),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ["queue"] });
-      const prev = qc.getQueryData(["queue"]);
-      qc.setQueryData(
-        ["queue"],
-        (old) =>
-          old?.map((q) => {
-            if (q.id !== id) return q;
-            const nextStatus =
-              q.status === "paused"
-                ? "downloading"
-                : ["downloading", "pending"].includes(q.status)
-                  ? "paused"
-                  : q.status;
-            return { ...q, status: nextStatus };
-          }) ?? []
-      );
-      return { prev };
-    },
-    onError: (err, _id, ctx) => {
-      qc.setQueryData(["queue"], ctx?.prev);
+    onError: (err) => {
       setSnackbar({
         open: true,
         message: err?.response?.data?.error || err?.message || "Failed to pause/resume query",
@@ -112,22 +77,7 @@ export function useQueueMutations() {
 
   const pauseItemMutation = useMutation({
     mutationFn: ({ queryId, itemId }) => pauseItem(queryId, itemId),
-    onMutate: async ({ queryId, itemId }) => {
-      await qc.cancelQueries({ queryKey: ["queue-item", queryId] });
-      const prev = qc.getQueryData(["queue-item", queryId]);
-      qc.setQueryData(["queue-item", queryId], (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          searchResults: old.searchResults?.map((r) =>
-            r.id === itemId ? { ...r, status: r.status === "paused" ? "pending" : "paused" } : r
-          ),
-        };
-      });
-      return { prev };
-    },
-    onError: (err, { queryId }, ctx) => {
-      qc.setQueryData(["queue-item", queryId], ctx?.prev);
+    onError: (err) => {
       setSnackbar({
         open: true,
         message: err?.response?.data?.error || err?.message || "Failed to pause item",
@@ -142,21 +92,7 @@ export function useQueueMutations() {
 
   const deleteItemMutation = useMutation({
     mutationFn: ({ queryId, itemId }) => deleteItem(queryId, itemId),
-    onMutate: async ({ queryId, itemId }) => {
-      await qc.cancelQueries({ queryKey: ["queue-item", queryId] });
-      const prev = qc.getQueryData(["queue-item", queryId]);
-      qc.setQueryData(["queue-item", queryId], (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          searchResults: old.searchResults?.filter((r) => r.id !== itemId),
-          results: old.results != null ? old.results - 1 : old.results,
-        };
-      });
-      return { prev };
-    },
-    onError: (err, { queryId }, ctx) => {
-      qc.setQueryData(["queue-item", queryId], ctx?.prev);
+    onError: (err) => {
       setSnackbar({
         open: true,
         message: err?.response?.data?.error || err?.message || "Failed to remove item",
@@ -178,6 +114,9 @@ export function useQueueMutations() {
     pauseMutation,
     pauseItemMutation,
     deleteItemMutation,
+    deletingItemId: deleteItemMutation.isPending
+      ? (deleteItemMutation.variables?.itemId ?? null)
+      : null,
     snackbar,
     closeSnackbar,
   };

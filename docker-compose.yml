@@ -7,18 +7,28 @@ services:
       - "${NEXTCLOUD_GID:-33}"
     env_file:
       - .env
+    environment:
+      # SERVER_PORT is host-facing in .env; the application always listens on
+      # the fixed service port inside the Compose network.
+      SERVER_PORT: "3333"
+      # Docker exposes the host port below; the process must listen on the
+      # container interface so the host mapping can reach it.
+      SERVER_HOST: "0.0.0.0"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      DOWNLOADS_DIR: /data/downloads
     ports:
-      - "${SERVER_PORT:-3333}:3333"
+      - "127.0.0.1:${SERVER_PORT:-3333}:3333"
     volumes:
       - ./server/:/app
       - ./shared/:/app/shared
       - ./shared/:/shared
       - /app/node_modules
       - .env:/.env:ro
-      - ${DOWNLOADS_DIR:-./data/downloads}:/data/downloads:shared
+      - ${DOWNLOADS_HOST_DIR:-./data/downloads}:/data/downloads:shared
       - queries_data:/data/queries
     restart: unless-stopped
-    command: /bin/sh -c 'npx prisma generate && npx prisma db push && if [ "$NODE_ENV" = "development" ]; then npm run db:studio & STUDIO_PID=$!; npm run dev; kill $STUDIO_PID 2>/dev/null; else npm start; fi'
+    command: /bin/sh -c 'npx prisma generate && npm run db:migrate && if [ "$NODE_ENV" = "development" ]; then npm run db:studio & STUDIO_PID=$!; npm run dev; kill $STUDIO_PID 2>/dev/null; else npm start; fi'
 
   frontend:
     build:
@@ -44,8 +54,6 @@ services:
   redis:
     image: redis:8.6.1-alpine
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     environment:

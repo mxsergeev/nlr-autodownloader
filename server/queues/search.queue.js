@@ -1,7 +1,23 @@
 import { searchQueue } from "../queue.js";
+import { getCurrentQuery, isCurrentGeneration } from "../services/query-generation.service.js";
 
-export async function addSearchJob({ metadata }) {
-  const jobId = `search-${metadata.id}`;
+/**
+ * Queue search work by immutable query identity.  The processor reloads all
+ * metadata from SQLite, so mutable metadata snapshots never cross the queue.
+ *
+ * @param {{ queryId?: number, generation?: number, metadata?: { id: number, generation?: number } }} params
+ * @returns {Promise<boolean>} whether a job was queued
+ */
+export async function addSearchJob({ queryId, generation, metadata } = {}) {
+  const id = Number(queryId ?? metadata?.id);
+  const currentGeneration = Number(generation ?? metadata?.generation);
+
+  if (!Number.isInteger(id) || !Number.isInteger(currentGeneration)) return false;
+
+  const current = await getCurrentQuery(id, currentGeneration);
+  if (!current) return false;
+
+  const jobId = `search-${id}-g${currentGeneration}`;
 
   // Remove any stale completed/failed job so the same query can always be re-processed.
   const existing = await searchQueue.getJob(jobId);
@@ -12,9 +28,13 @@ export async function addSearchJob({ metadata }) {
     }
   }
 
+  // The existing-job lookup/removal above can yield to a pause/retry/delete.
+  // Recheck in the final gap immediately before creating the next-stage job.
+  if (!(await isCurrentGeneration(id, currentGeneration))) return false;
+
   await searchQueue.add(
     "search",
-    { metadata },
+    { queryId: id, generation: currentGeneration },
     {
       jobId,
       attempts: 3,
@@ -23,4 +43,6 @@ export async function addSearchJob({ metadata }) {
       removeOnFail: true,
     }
   );
+
+  return true;
 }

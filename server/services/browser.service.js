@@ -1,7 +1,8 @@
 import { firefox } from "playwright";
 import UserAgent from "user-agents";
+import { config } from "../config.js";
 
-const MAX_BROWSER_CONTEXTS = parseInt(process.env.MAX_BROWSER_CONTEXTS || "3", 10);
+const MAX_BROWSER_CONTEXTS = config.maxBrowserContexts;
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -49,25 +50,30 @@ async function startBrowser() {
   if (browser && browser.isConnected()) return;
 
   if (browser) {
-    await stopBrowser();
+    await shutdownBrowser();
   }
 
-  let headless;
-
-  if (process.env.PLAYWRIGHT_HEADLESS !== undefined) {
-    headless = process.env.PLAYWRIGHT_HEADLESS === "true";
-  } else {
-    headless = true;
+  // Firefox is much more consistent in headless mode than Chromium. The
+  // Chromium-only command-line switches previously passed here do nothing for
+  // Firefox and can obscure the real reason a root-owned test container fails
+  // to start content processes. Keep sandboxing enabled by default; the
+  // opt-in root fallback is limited to environments where the kernel forbids
+  // Firefox's user-namespace sandbox (production Docker runs as non-root).
+  const launchOptions = {
+    headless: config.playwrightHeadless,
+  };
+  if (process.getuid?.() === 0 && process.env.MOZ_DISABLE_CONTENT_SANDBOX === undefined) {
+    launchOptions.env = { ...process.env, MOZ_DISABLE_CONTENT_SANDBOX: "1" };
   }
 
-  // Firefox is much more consistent in headless mode than Chromium
-  browser = await firefox.launch({
-    headless,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
+  browser = await firefox.launch(launchOptions);
 }
 
-async function stopBrowser() {
+/**
+ * Closes the shared browser instance. Process signal ownership belongs to the
+ * application lifecycle module so there is exactly one shutdown coordinator.
+ */
+export async function shutdownBrowser() {
   if (!browser) return;
   await browser.close().catch(() => {});
   browser = undefined;
@@ -99,12 +105,18 @@ export async function runJob(fn) {
       timezoneId,
       locale: "ru-RU",
     };
+    if (
+      process.env.RUN_LIVE_NLR_TESTS === "1" &&
+      process.env.NLR_LIVE_IGNORE_HTTPS_ERRORS === "1"
+    ) {
+      contextOptions.ignoreHTTPSErrors = true;
+    }
 
     try {
       context = await browser.newContext(contextOptions);
     } catch {
       // try restarting once
-      await stopBrowser();
+      await shutdownBrowser();
       await startBrowser();
       context = await browser.newContext(contextOptions);
     }
@@ -119,10 +131,3 @@ export async function runJob(fn) {
     releaseSlot();
   }
 }
-
-async function gracefulShutdown() {
-  await stopBrowser();
-}
-
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
