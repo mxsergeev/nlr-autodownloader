@@ -60,8 +60,8 @@ Before a download starts, the site prepares the file ("Проверка возм
 `--dry-run` prints one line per file that would be downloaded (year, pages, file name), cut to the terminal width, then a totals line. Groups with a zero count are left out:
 
 ```
-1900      4 p.  Новое время - 1900-01-05.pdf
-1900      ? p.  Новое время - 1900.pdf
+1900      4 p.  Новое время 1900-01-05.pdf
+1900      ? p.  Новое время 1900.pdf
 
 2 files, 4 pages, 1 of unknown size. Skipped: 6 over 500 pages (add --big), 79 not online.
 ```
@@ -70,7 +70,7 @@ Before a download starts, the site prepares the file ("Проверка возм
 
 ## File names
 
-Names are built from the catalog title: the repeated `A : A` tail is dropped, `:` becomes `-`, unmatched `[` and `]` are removed, and characters not allowed in file names (`/ \ ? * | " < >`) become `_`. Names are cut to 200 bytes of UTF-8 so long titles can be saved.
+Names are the catalog title with characters not allowed in file names (`/ \ ? % * : | " < >`) replaced by `_` and all dots removed (`Газ. полит.` → `Газ полит`). Names are cut to 200 bytes of UTF-8 so long titles can be saved. This keeps names compatible with files downloaded by earlier versions of the tool, so a dry run recognizes them.
 
 ## Output
 
