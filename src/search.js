@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'timers/promises'
-import { sanitizeFileName } from './files.js'
+import { sanitizeFileName, truncateFileName } from './files.js'
 import { assertOk } from './http.js'
 import { warn } from './log.js'
 
@@ -108,7 +108,7 @@ function assignFileNames(items) {
   const counts = new Map()
 
   for (const item of items) {
-    const base = sanitizeFileName(item.title)
+    const base = truncateFileName(sanitizeFileName(item.title))
     const n = (counts.get(base) ?? 0) + 1
     counts.set(base, n)
     item.fileName = n === 1 ? base : `${base} (${n})`

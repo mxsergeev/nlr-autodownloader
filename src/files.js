@@ -2,6 +2,18 @@ import { promises as fs } from 'fs'
 import path from 'path'
 
 const RESULTS_FILE = '.results.json'
+// File systems allow 255 bytes; this leaves room for " (2)", " (10 of 12)" and ".pdf.part"
+const MAX_NAME_BYTES = 200
+
+/** Cut a name to MAX_NAME_BYTES of UTF-8 (a Cyrillic letter takes 2) without splitting a character. */
+export function truncateFileName(name) {
+  let result = ''
+  for (const char of name) {
+    if (Buffer.byteLength(result + char) > MAX_NAME_BYTES) break
+    result += char
+  }
+  return result.trim()
+}
 
 export function sanitizeFileName(name = '') {
   name = name.replace(/[/\\?%*:|"<>]/g, '_')

@@ -27,7 +27,7 @@ Options:
 
 Re-running the same command resumes: finished files are skipped.`
 
-const RESULTS_VERSION = 3
+const RESULTS_VERSION = 4
 const SEARCH_ATTEMPTS = 3
 const PREPARE_TIMEOUT_MS = 30_000
 const BIG_PREPARE_TIMEOUT_MS = 3 * 60_000
