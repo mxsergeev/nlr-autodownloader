@@ -89,23 +89,6 @@ function parsePages(format = '') {
   return numbers ? numbers.reduce((sum, n) => sum + Number(n), 0) : null
 }
 
-/**
- * Make a catalog title readable:
- * "Северная Пчела. 1860, № 1 – 291 : 1860, № 1 – 291" → "Северная Пчела. 1860, № 1 – 291",
- * "Новое время : Иллюстрированное приложение" → "Новое время - Иллюстрированное приложение",
- * "[Красное Село. Церковь … : фотография" → "Красное Село. Церковь … - фотография"
- */
-function cleanTitle(title) {
-  const parts = title.trim().replace(/\s+/g, ' ').split(' : ')
-  // Year volumes repeat their issue range after the title
-  if (parts.length > 1 && parts.at(-2).endsWith(parts.at(-1))) parts.pop()
-
-  const cleaned = parts.join(' - ')
-  // Catalog titles sometimes open a bracket that only closes in the full record
-  const unbalanced = cleaned.split('[').length !== cleaned.split(']').length
-  return unbalanced ? cleaned.replace(/[[\]]/g, '') : cleaned
-}
-
 /** One search result from the API (a PNX record). */
 function toItem({ pnx }) {
   // Digitized documents link to the Vivaldi viewer: "$$Tvivaldi_open$$E07NLR_OPEN_VL$$1pn000115255"
@@ -114,7 +97,7 @@ function toItem({ pnx }) {
 
   return {
     id,
-    title: cleanTitle(pnx.display.title?.[0] ?? id),
+    title: (pnx.display.title?.[0] ?? id).trim().replace(/\s+/g, ' '),
     vivaldiId: viewerLink?.match(/\$\$1([^$]+)/)?.[1] ?? null,
     pages: parsePages(pnx.display.format?.[0]),
   }
@@ -125,7 +108,7 @@ function assignFileNames(items) {
   const counts = new Map()
 
   for (const item of items) {
-    const base = sanitizeFileName(truncateFileName(item.title))
+    const base = truncateFileName(sanitizeFileName(item.title))
     const n = (counts.get(base) ?? 0) + 1
     counts.set(base, n)
     item.fileName = n === 1 ? base : `${base} (${n})`

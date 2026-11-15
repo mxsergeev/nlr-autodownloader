@@ -15,12 +15,19 @@ export function truncateFileName(name) {
   return result.trim()
 }
 
-/** Replace characters file systems don't allow; drop trailing dots and spaces (Windows strips them). */
 export function sanitizeFileName(name = '') {
-  return name
-    .replace(/:/g, '-')
-    .replace(/[/\\?*|"<>]/g, '_')
-    .replace(/[. ]+$/, '')
+  name = name.replace(/[/\\?%*:|"<>]/g, '_')
+  const lastDotIndex = name.lastIndexOf('.')
+
+  if (lastDotIndex > 0) {
+    const base = name.substring(0, lastDotIndex).replace(/\./g, '')
+    const ext = name.substring(lastDotIndex + 1)
+
+    // Keep the extension only if it looks like one (letters only)
+    if (/^[a-zA-Z]+$/.test(ext)) return base + '.' + ext
+  }
+
+  return name.replace(/\./g, '')
 }
 
 /** Folder name for a search. Matches the old `<q>_<year>` layout so existing downloads are reused. */
