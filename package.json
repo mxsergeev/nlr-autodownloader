@@ -1,0 +1,25 @@
+{
+  "name": "nlr-autodownloader",
+  "version": "2.0.0",
+  "description": "Download documents from the National Library of Russia (primo.nlr.ru) search results",
+  "license": "ISC",
+  "type": "module",
+  "bin": {
+    "nlr": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "globals": "^17.1.0",
+    "prettier": "^3.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
