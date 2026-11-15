@@ -46,16 +46,38 @@ nlr --url "https://primo.nlr.ru/primo-explore/search?..." --name my-search
 
 A query search is the same as the site's advanced search with the query matching exactly (`совпадает`) and `Год издания` equal to the year, sorted by issue date.
 
+## Big documents
+
 Before a download starts, the site prepares the file ("Проверка возможности загрузки"). Small documents are ready almost immediately; a ~1200 page year volume took about 2 minutes in tests, which is why big documents are opt-in with `--big`.
 
-Big documents are split by the site into parts of roughly 200 MB, saved as `<title> (1 of 3).pdf`, `<title> (2 of 3).pdf`, … The parts are renamed into place only after all of them are downloaded.
+- Page counts come from the catalog record (`с.` pages or `л.` sheets). Documents over `--max-pages` are skipped.
+- Some records have no page count (newspaper issues and year volumes). These are downloaded anyway. Without `--big`, if the site needs more than 30 s to prepare one, it is reported as `Too big … Add --big to download it.` It is not retried and does not trigger the rate-limit cooldown.
+- `--big` removes the page limit and waits up to 3 min for preparation.
+- The site splits big documents into parts of roughly 200 MB, saved as `<title> (1 of 3).pdf`, `<title> (2 of 3).pdf`, … The parts are renamed into place only after all of them are downloaded.
+
+## Dry run
+
+`--dry-run` prints one line per file that would be downloaded (year, pages, file name), cut to the terminal width, then a totals line. Groups with a zero count are left out:
+
+```
+1900      4 p.  Новое время - 1900-01-05.pdf
+1900      ? p.  Новое время - 1900.pdf
+
+2 files, 4 pages, 1 of unknown size. Skipped: 6 over 500 pages (add --big), 79 not online.
+```
+
+`nlr.log` gets the full, uncut names.
+
+## File names
+
+Names are built from the catalog title: the repeated `A : A` tail is dropped, `:` becomes `-`, unmatched `[` and `]` are removed, and characters not allowed in file names (`/ \ ? * | " < >`) become `_`. Names are cut to 200 bytes of UTF-8 so long titles can be saved.
 
 ## Output
 
 ```
 downloads/
-  nlr.log                     # everything printed to the terminal
-  Северная_пчела_1885/
+  nlr.log                     # everything printed to the terminal, with timestamps
+  Северная_пчела_1885/        # <query>_<year>
     .results.json             # cached search results
     <document title>.pdf
     <big document title> (1 of 3).pdf
