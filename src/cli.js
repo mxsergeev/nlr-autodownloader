@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
 import { downloadDocument } from './download.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
-import { error, log, setLogFile, warn } from './log.js'
+import { error, log, report, setLogFile, warn } from './log.js'
 import { runPool } from './pool.js'
 import { fetchSearchResults, querySearch, urlSearch } from './search.js'
 
@@ -27,7 +27,7 @@ Options:
 
 Re-running the same command resumes: finished files are skipped.`
 
-const RESULTS_VERSION = 2
+const RESULTS_VERSION = 3
 const SEARCH_ATTEMPTS = 3
 const PREPARE_TIMEOUT_MS = 30_000
 const BIG_PREPARE_TIMEOUT_MS = 3 * 60_000
@@ -58,7 +58,7 @@ function buildSearches(query, values) {
   if (values.url) {
     const name = values.name ?? `url_${createHash('sha1').update(values.url).digest('hex').slice(0, 8)}`
     try {
-      return [{ name, ...urlSearch(values.url) }]
+      return [{ name, label: name, ...urlSearch(values.url) }]
     } catch (err) {
       throw new UsageError(`Invalid --url: ${err.message}`)
     }
@@ -68,16 +68,17 @@ function buildSearches(query, values) {
 
   return parseYears(values.years).map((year) => ({
     name: searchDirName({ q: query, year }),
+    label: String(year),
     ...querySearch({ q: query, year }),
   }))
 }
 
 /** Cached result list if complete, otherwise a fresh search (retried a few times). */
-async function loadResults(search, dir) {
+async function loadResults(search, dir, { quiet }) {
   const cached = await readResults(dir)
   if (cached?.version === RESULTS_VERSION && cached.items.length === cached.total) return cached
 
-  log(`[${search.name}] Searching ${search.url}`)
+  if (!quiet) log(`[${search.name}] Searching ${search.url}`)
 
   for (let attempt = 1; ; attempt++) {
     try {
@@ -98,14 +99,15 @@ async function loadResults(search, dir) {
   }
 }
 
-/** Split items into: already downloaded, to download, too big, not available online. */
+/** Split items into: already downloaded, to download, too big (or unknown size), not available online. */
 function classify(items, downloaded, maxPages) {
   const groups = { downloaded: [], download: [], tooBig: [], notOnline: [] }
 
   for (const item of items) {
     if (downloaded.has(item.fileName)) groups.downloaded.push(item)
     else if (!item.vivaldiId) groups.notOnline.push(item)
-    else if (item.pages > maxPages) groups.tooBig.push(item)
+    // Unknown size is usually a whole year volume of a newspaper
+    else if ((item.pages ?? Infinity) > maxPages) groups.tooBig.push(item)
     else groups.download.push(item)
   }
 
@@ -114,16 +116,48 @@ function classify(items, downloaded, maxPages) {
 
 const formatPages = (item) => `${item.pages ?? '?'} p.`
 
-/** @returns {Promise<{ name: string, line: string, ok: boolean, aborted?: boolean }>} */
+/** "8 files, 1234 pages. Skipped: 6 over 500 pages or unknown size (add --big), 79 not online." */
+function dryRunTotal(summary, maxPages) {
+  const groups = summary.flatMap((s) => s.groups ?? [])
+  const count = (key) => groups.reduce((n, g) => n + g[key].length, 0)
+
+  const toDownload = groups.flatMap((g) => g.download)
+  const pages = toDownload.reduce((n, item) => n + (item.pages ?? 0), 0)
+  const unknownSize = toDownload.filter((item) => item.pages == null).length
+  const skipped = [
+    [count('downloaded'), 'already downloaded'],
+    [count('tooBig'), `over ${maxPages} pages or unknown size (add --big)`],
+    [count('notOnline'), 'not online'],
+  ]
+    .filter(([n]) => n > 0)
+    .map(([n, what]) => `${n} ${what}`)
+
+  return (
+    `${plural(toDownload.length, 'file')}, ${plural(pages, 'page')}` +
+    (unknownSize ? `, ${unknownSize} of unknown size.` : '.') +
+    (skipped.length ? ` Skipped: ${skipped.join(', ')}.` : '')
+  )
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** @returns {Promise<{ name: string, line?: string, groups?: object, ok: boolean, aborted?: boolean }>} */
 async function processSearch(search, { out, workers, maxPages, prepareTimeout, dryRun }) {
   const dir = path.join(out, search.name)
 
   let results
   try {
-    results = await loadResults(search, dir)
+    results = await loadResults(search, dir, { quiet: dryRun })
   } catch (err) {
     error(`[${search.name}] Search failed: ${describe(err)}`)
     return { name: search.name, line: `search failed: ${describe(err)}`, ok: false }
+  }
+
+  const groups = classify(results.items, await downloadedFileNames(dir), maxPages)
+
+  if (dryRun) {
+    for (const item of groups.download) report(`${search.label}  ${formatPages(item).padStart(7)}  ${item.fileName}`)
+    return { name: search.name, groups, ok: true }
   }
 
   if (results.total === 0) {
@@ -131,25 +165,14 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
     return { name: search.name, line: 'no results', ok: true }
   }
 
-  const groups = classify(results.items, await downloadedFileNames(dir), maxPages)
-  const total = results.items.length
   const counts =
-    (maxPages === Infinity ? '' : `${groups.tooBig.length} too big (over ${maxPages} pages), `) +
+    (maxPages === Infinity ? '' : `${groups.tooBig.length} too big (over ${maxPages} pages or unknown size), `) +
     `${groups.notOnline.length} not available online`
 
   log(
-    `[${search.name}] ${total} results: ${groups.downloaded.length} already downloaded,`,
+    `[${search.name}] ${results.items.length} results: ${groups.downloaded.length} already downloaded,`,
     `${groups.download.length} to download, ${counts}`,
   )
-
-  if (dryRun) {
-    for (const item of groups.download) log(`  download ${formatPages(item).padStart(8)}  ${item.fileName}`)
-    for (const item of groups.tooBig) log(`  too big  ${formatPages(item).padStart(8)}  ${item.fileName}`)
-
-    const pages = groups.download.reduce((sum, item) => sum + (item.pages ?? 0), 0)
-    const line = `${groups.download.length} to download (${pages} pages), ${groups.downloaded.length} done, ${counts}`
-    return { name: search.name, line, ok: true }
-  }
 
   let downloaded = groups.downloaded.length
   const downloadable = downloaded + groups.download.length
@@ -218,10 +241,12 @@ async function main() {
   await fs.mkdir(options.out, { recursive: true })
   setLogFile(path.join(options.out, 'nlr.log'))
 
-  log(
-    `${options.dryRun ? 'Dry run: ' : ''}${searches.length} search(es), ${options.workers} worker(s),`,
-    `${options.maxPages === Infinity ? 'no page limit' : `max ${options.maxPages} pages`} → ${options.out}`,
-  )
+  if (!options.dryRun) {
+    log(
+      `${searches.length} search(es), ${options.workers} worker(s),`,
+      `${options.maxPages === Infinity ? 'no page limit' : `max ${options.maxPages} pages`} → ${options.out}`,
+    )
+  }
 
   const summary = []
   for (const search of searches) {
@@ -234,8 +259,12 @@ async function main() {
     }
   }
 
-  const width = Math.max(...summary.map((s) => s.name.length))
-  log('Summary:\n' + summary.map((s) => `  ${s.name.padEnd(width)}  ${s.line}`).join('\n'))
+  if (options.dryRun) {
+    report(`\n${dryRunTotal(summary, options.maxPages)}`)
+  } else {
+    const width = Math.max(...summary.map((s) => s.name.length))
+    log('Summary:\n' + summary.map((s) => `  ${s.name.padEnd(width)}  ${s.line}`).join('\n'))
+  }
 
   const complete = summary.length === searches.length && summary.every((s) => s.ok)
   return complete ? 0 : 1

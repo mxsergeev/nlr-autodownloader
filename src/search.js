@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from 'timers/promises'
 import { sanitizeFileName } from './files.js'
 import { assertOk } from './http.js'
-import { log, warn } from './log.js'
+import { warn } from './log.js'
 
 // The same JSON API the primo.nlr.ru web page uses; a guest token is enough
 const API = 'https://primo.nlr.ru/primo_library/libweb/webservices/rest'
@@ -80,10 +80,10 @@ async function fetchResultsPage(search, offset, token) {
   return getJson(`${API}/primo-explore/v1/pnxs?${params}`, { Authorization: `Bearer ${token}` })
 }
 
-/** "1234 с." → 1234, "[2], 63 с. ; 17 см." → 65, unknown → null */
+/** "1234 с." → 1234, "[2], 63 с. ; 17 см." → 65, "1 л." (sheets, e.g. photos) → 1, unknown → null */
 function parsePages(format = '') {
-  const pagesPart = format.split('с.')[0]
-  if (pagesPart === format) return null
+  const pagesPart = format.match(/^(.*?)[сл]\./)?.[1]
+  if (pagesPart === undefined) return null
 
   const numbers = pagesPart.match(/\d+/g)
   return numbers ? numbers.reduce((sum, n) => sum + Number(n), 0) : null
@@ -134,7 +134,6 @@ export async function fetchSearchResults(search) {
     total = results.info.total
     for (const item of results.docs.map(toItem)) items.set(item.id, item)
 
-    if (offset === 0) log(`[${search.name}] ${total} results`)
     if (results.docs.length === 0) break
   }
 
