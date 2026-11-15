@@ -37,6 +37,8 @@ function createSession(referer) {
 }
 
 /** Big documents come in several parts: "<name> (1 of 3).pdf"; single-part ones are just "<name>.pdf". */
+export class PrepareTimeoutError extends Error {}
+
 const partFileName = (fileName, part, parts) => (parts === 1 ? fileName : `${fileName} (${part + 1} of ${parts})`)
 
 function refusalReason(text) {
@@ -56,6 +58,7 @@ function refusalReason(text) {
  *
  * @param {{ vivaldiId: string, fileName: string }} item
  * @param {{ prepareTimeout: number, onPartReady?: (partsReady: number) => void }} options
+ * @returns {Promise<number>} number of parts
  */
 export async function downloadDocument(item, dir, { prepareTimeout, onPartReady = () => {} }) {
   const base = `${VIVALDI}/${item.vivaldiId}`
@@ -78,7 +81,7 @@ export async function downloadDocument(item, dir, { prepareTimeout, onPartReady 
     while (!progress.Done) {
       if (Date.now() > deadline) {
         await post('canceldownload').catch(() => {})
-        throw new Error(
+        throw new PrepareTimeoutError(
           `Not prepared after ${prepareTimeout / 1000}s (part ${progress.PartsReady + 1} at ${progress.PercentReady ?? 0}%)`,
         )
       }
@@ -114,5 +117,5 @@ export async function downloadDocument(item, dir, { prepareTimeout, onPartReady 
 
   for (const filePath of files) await fs.rename(filePath + '.part', filePath)
 
-  return { parts }
+  return parts
 }

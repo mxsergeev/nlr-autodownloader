@@ -4,7 +4,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
-import { downloadDocument } from './download.js'
+import { downloadDocument, PrepareTimeoutError } from './download.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
 import { error, log, report, setLogFile, warn } from './log.js'
 import { runPool } from './pool.js'
@@ -99,15 +99,14 @@ async function loadResults(search, dir, { quiet }) {
   }
 }
 
-/** Split items into: already downloaded, to download, too big (or unknown size), not available online. */
+/** Split items into: already downloaded, to download, too big, not available online. */
 function classify(items, downloaded, maxPages) {
   const groups = { downloaded: [], download: [], tooBig: [], notOnline: [] }
 
   for (const item of items) {
     if (downloaded.has(item.fileName)) groups.downloaded.push(item)
     else if (!item.vivaldiId) groups.notOnline.push(item)
-    // Unknown size is usually a whole year volume of a newspaper
-    else if ((item.pages ?? Infinity) > maxPages) groups.tooBig.push(item)
+    else if (item.pages > maxPages) groups.tooBig.push(item)
     else groups.download.push(item)
   }
 
@@ -116,7 +115,7 @@ function classify(items, downloaded, maxPages) {
 
 const formatPages = (item) => `${item.pages ?? '?'} p.`
 
-/** "8 files, 1234 pages. Skipped: 6 over 500 pages or unknown size (add --big), 79 not online." */
+/** "8 files, 1234 pages, 2 of unknown size. Skipped: 6 over 500 pages (add --big), 79 not online." */
 function dryRunTotal(summary, maxPages) {
   const groups = summary.flatMap((s) => s.groups ?? [])
   const count = (key) => groups.reduce((n, g) => n + g[key].length, 0)
@@ -126,7 +125,7 @@ function dryRunTotal(summary, maxPages) {
   const unknownSize = toDownload.filter((item) => item.pages == null).length
   const skipped = [
     [count('downloaded'), 'already downloaded'],
-    [count('tooBig'), `over ${maxPages} pages or unknown size (add --big)`],
+    [count('tooBig'), `over ${maxPages} pages (add --big)`],
     [count('notOnline'), 'not online'],
   ]
     .filter(([n]) => n > 0)
@@ -166,7 +165,7 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
   }
 
   const counts =
-    (maxPages === Infinity ? '' : `${groups.tooBig.length} too big (over ${maxPages} pages or unknown size), `) +
+    (maxPages === Infinity ? '' : `${groups.tooBig.length} too big (over ${maxPages} pages), `) +
     `${groups.notOnline.length} not available online`
 
   log(
@@ -176,15 +175,25 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
 
   let downloaded = groups.downloaded.length
   const downloadable = downloaded + groups.download.length
+  const notPrepared = []
 
   const { failed, aborted } = await runPool(
     groups.download,
     workers,
     async (item) => {
-      const { parts } = await downloadDocument(item, dir, {
-        prepareTimeout,
-        onPartReady: (ready) => log(`[${search.name}] ${item.fileName}: part ${ready} prepared, more to come`),
-      })
+      let parts
+      try {
+        parts = await downloadDocument(item, dir, {
+          prepareTimeout,
+          onPartReady: (ready) => log(`[${search.name}] ${item.fileName}: part ${ready} prepared, more to come`),
+        })
+      } catch (err) {
+        // Without --big, a slow file is too big (its size is often unknown up front), not a sign of rate limiting
+        if (!(err instanceof PrepareTimeoutError) || maxPages === Infinity) throw err
+        notPrepared.push(item)
+        warn(`[${search.name}] Too big: ${item.fileName}: ${err.message}. Add --big to download it.`)
+        return
+      }
       downloaded++
       const partsNote = parts > 1 ? ` (${parts} parts)` : ''
       log(`[${search.name}] (${downloaded}/${downloadable}) ${formatPages(item)}  ${item.fileName}${partsNote}`)
@@ -204,7 +213,10 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
   }
 
   const line =
-    `${downloaded}/${downloadable} downloaded` + (failed.length ? `, ${failed.length} failed` : '') + `; ${counts}`
+    `${downloaded}/${downloadable} downloaded` +
+    (failed.length ? `, ${failed.length} failed` : '') +
+    (notPrepared.length ? `, ${notPrepared.length} too big to prepare in ${prepareTimeout / 1000}s (add --big)` : '') +
+    `; ${counts}`
   return { name: search.name, line, ok: failed.length === 0, aborted }
 }
 
