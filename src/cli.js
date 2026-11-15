@@ -2,6 +2,7 @@
 import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
 import { downloadDocument } from './download.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
@@ -33,12 +34,8 @@ const BIG_PREPARE_TIMEOUT_MS = 3 * 60_000
 
 class UsageError extends Error {}
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-// Some errors carry multi-line details; the first line is enough for the log
-const firstLine = (err) => err.message.split('\n')[0]
-
-let interrupted = false
+// fetch() only says "fetch failed"; the network reason (ECONNRESET, ...) is in the cause
+const describe = (err) => (err.cause ? `${err.message} (${err.cause.code ?? err.cause.message})` : err.message)
 
 function parseYears(value) {
   const match = value.match(/^(\d{4})(?:-(\d{4}))?$/)
@@ -95,7 +92,7 @@ async function loadResults(search, dir) {
       return results
     } catch (err) {
       if (attempt >= SEARCH_ATTEMPTS) throw err
-      warn(`[${search.name}] Search failed (attempt ${attempt}/${SEARCH_ATTEMPTS}): ${firstLine(err)}`)
+      warn(`[${search.name}] Search failed (attempt ${attempt}/${SEARCH_ATTEMPTS}): ${describe(err)}`)
       await sleep(5000)
     }
   }
@@ -115,7 +112,7 @@ function classify(items, downloaded, maxPages) {
   return groups
 }
 
-const formatPages = (item) => `${item.pages ?? '?'} p.`.padStart(8)
+const formatPages = (item) => `${item.pages ?? '?'} p.`
 
 /** @returns {Promise<{ name: string, line: string, ok: boolean, aborted?: boolean }>} */
 async function processSearch(search, { out, workers, maxPages, prepareTimeout, dryRun }) {
@@ -125,8 +122,8 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
   try {
     results = await loadResults(search, dir)
   } catch (err) {
-    error(`[${search.name}] Search failed: ${firstLine(err)}`)
-    return { name: search.name, line: `search failed: ${firstLine(err)}`, ok: false }
+    error(`[${search.name}] Search failed: ${describe(err)}`)
+    return { name: search.name, line: `search failed: ${describe(err)}`, ok: false }
   }
 
   if (results.total === 0) {
@@ -146,8 +143,8 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
   )
 
   if (dryRun) {
-    for (const item of groups.download) log(`  download ${formatPages(item)}  ${item.fileName}`)
-    for (const item of groups.tooBig) log(`  too big  ${formatPages(item)}  ${item.fileName}`)
+    for (const item of groups.download) log(`  download ${formatPages(item).padStart(8)}  ${item.fileName}`)
+    for (const item of groups.tooBig) log(`  too big  ${formatPages(item).padStart(8)}  ${item.fileName}`)
 
     const pages = groups.download.reduce((sum, item) => sum + (item.pages ?? 0), 0)
     const line = `${groups.download.length} to download (${pages} pages), ${groups.downloaded.length} done, ${counts}`
@@ -167,13 +164,12 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
       })
       downloaded++
       const partsNote = parts > 1 ? ` (${parts} parts)` : ''
-      log(`[${search.name}] (${downloaded}/${downloadable}) ${formatPages(item).trim()}  ${item.fileName}${partsNote}`)
+      log(`[${search.name}] (${downloaded}/${downloadable}) ${formatPages(item)}  ${item.fileName}${partsNote}`)
     },
     {
       onError: (item, err, { attempt, retrying, cooldown }) => {
-        if (interrupted) return
         warn(
-          `[${search.name}] Failed: ${item.fileName} (attempt ${attempt}): ${firstLine(err)}.`,
+          `[${search.name}] Failed: ${item.fileName} (attempt ${attempt}): ${describe(err)}.`,
           retrying ? `Retrying later; pausing all workers ${cooldown / 1000}s.` : 'Giving up on this one.',
         )
       },
@@ -181,7 +177,7 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
   )
 
   for (const { item, error: err } of failed) {
-    error(`[${search.name}] Not downloaded: ${item.fileName}: ${firstLine(err)}`)
+    error(`[${search.name}] Not downloaded: ${item.fileName}: ${describe(err)}`)
   }
 
   const line =
@@ -248,7 +244,6 @@ async function main() {
 process.umask(0o002) // group-writable files, e.g. for a shared/synced downloads folder
 
 process.on('SIGINT', () => {
-  interrupted = true
   log('Interrupted. Re-run the same command to resume.')
   process.exit(130)
 })

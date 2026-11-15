@@ -2,12 +2,12 @@ import { createWriteStream, promises as fs } from 'fs'
 import path from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
+import { setTimeout as sleep } from 'timers/promises'
+import { assertOk } from './http.js'
 
 const VIVALDI = 'https://vivaldi.nlr.ru'
 const POLL_INTERVAL_MS = 5000
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0'
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** HTTP client that keeps the cookies the site sets (its download state lives in the vivaldiSessionId session). */
 function createSession(referer) {
@@ -32,13 +32,20 @@ function createSession(referer) {
       cookies.set(pair.slice(0, i), pair.slice(i + 1))
     }
 
-    if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(url).pathname}`)
-    return response
+    return assertOk(response, url)
   }
 }
 
 /** Big documents come in several parts: "<name> (1 of 3).pdf"; single-part ones are just "<name>.pdf". */
 const partFileName = (fileName, part, parts) => (parts === 1 ? fileName : `${fileName} (${part + 1} of ${parts})`)
+
+function refusalReason(text) {
+  try {
+    return JSON.parse(text).error ?? text
+  } catch {
+    return text
+  }
+}
 
 /**
  * Download one digitized document into dir, doing the same requests as the "Скачать" button on its Vivaldi page:
@@ -58,7 +65,7 @@ export async function downloadDocument(item, dir, { prepareTimeout, onPartReady 
   await request(`${base}/details`) // starts the session
 
   const registered = await (await post('registerdownload')).text()
-  if (registered) throw new Error(`Download refused: ${JSON.parse(registered).error ?? registered}`)
+  if (registered) throw new Error(`Download refused: ${refusalReason(registered)}`)
 
   // This request only returns once everything is prepared; progress comes from polling instead
   const preparing = new AbortController()
@@ -92,12 +99,17 @@ export async function downloadDocument(item, dir, { prepareTimeout, onPartReady 
   const parts = progress.PartsReady
   const files = []
 
-  for (let part = 0; part < parts; part++) {
-    const filePath = path.join(dir, `${partFileName(item.fileName, part, parts)}.pdf`)
-    const response = await request(`${base}/partfile?part=${part}`)
+  try {
+    for (let part = 0; part < parts; part++) {
+      const filePath = path.join(dir, `${partFileName(item.fileName, part, parts)}.pdf`)
+      files.push(filePath)
 
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(filePath + '.part'))
-    files.push(filePath)
+      const response = await request(`${base}/partfile?part=${part}`)
+      await pipeline(Readable.fromWeb(response.body), createWriteStream(filePath + '.part'))
+    }
+  } catch (err) {
+    await Promise.all(files.map((filePath) => fs.rm(filePath + '.part', { force: true })))
+    throw err
   }
 
   for (const filePath of files) await fs.rename(filePath + '.part', filePath)

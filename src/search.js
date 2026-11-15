@@ -1,4 +1,6 @@
+import { setTimeout as sleep } from 'timers/promises'
 import { sanitizeFileName } from './files.js'
+import { assertOk } from './http.js'
 import { log, warn } from './log.js'
 
 // The same JSON API the primo.nlr.ru web page uses; a guest token is enough
@@ -6,8 +8,6 @@ const API = 'https://primo.nlr.ru/primo_library/libweb/webservices/rest'
 const VIEW = { inst: '07NLR', vid: '07NLR_VU1', lang: 'ru_RU' }
 const PAGE_SIZE = 100
 const PAGE_DELAY_MS = 1000
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Website URL of a search, for the log and for opening it in a browser. */
 function websiteUrl({ queries, sort, mode, tab, scope }) {
@@ -56,17 +56,15 @@ export function urlSearch(url) {
   }
 }
 
-let guestToken = null
-
 async function getJson(url, headers = {}) {
-  const response = await fetch(url, { headers })
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(url).pathname}`)
-  return response.json()
+  return assertOk(await fetch(url, { headers }), url).json()
 }
 
-async function fetchResultsPage(search, offset) {
-  guestToken ??= await getJson(`${API}/v1/guestJwt/${VIEW.inst}?isGuest=true&lang=${VIEW.lang}&viewId=${VIEW.vid}`)
+// The guest token expires after 24 h, so a long run gets a fresh one for each search
+const fetchGuestToken = () =>
+  getJson(`${API}/v1/guestJwt/${VIEW.inst}?isGuest=true&lang=${VIEW.lang}&viewId=${VIEW.vid}`)
 
+async function fetchResultsPage(search, offset, token) {
   const params = new URLSearchParams({
     ...VIEW,
     q: search.queries.join(';'),
@@ -79,7 +77,7 @@ async function fetchResultsPage(search, offset) {
     skipDelivery: 'Y',
   })
 
-  return getJson(`${API}/primo-explore/v1/pnxs?${params}`, { Authorization: `Bearer ${guestToken}` })
+  return getJson(`${API}/primo-explore/v1/pnxs?${params}`, { Authorization: `Bearer ${token}` })
 }
 
 /** "1234 с." → 1234, "[2], 63 с. ; 17 см." → 65, unknown → null */
@@ -95,13 +93,13 @@ function parsePages(format = '') {
 function toItem({ pnx }) {
   // Digitized documents link to the Vivaldi viewer: "$$Tvivaldi_open$$E07NLR_OPEN_VL$$1pn000115255"
   const viewerLink = pnx.links?.linktorsrc?.find((link) => link.includes('vivaldi'))
+  const id = pnx.control.recordid[0]
 
   return {
-    id: pnx.control.recordid[0],
-    title: (pnx.display.title?.[0] ?? pnx.control.recordid[0]).trim().replace(/\s+/g, ' '),
+    id,
+    title: (pnx.display.title?.[0] ?? id).trim().replace(/\s+/g, ' '),
     vivaldiId: viewerLink?.match(/\$\$1([^$]+)/)?.[1] ?? null,
     pages: parsePages(pnx.display.format?.[0]),
-    type: pnx.display.type?.[0] ?? null,
   }
 }
 
@@ -122,16 +120,17 @@ function assignFileNames(items) {
 /**
  * Fetch all results of a search.
  * @param {{ name: string, queries: string[], sort: string, mode: string, tab: string, scope: string }} search
- * @returns {Promise<{ total: number, items: { id: string, title: string, fileName: string, vivaldiId: string | null, pages: number | null, type: string | null }[] }>}
+ * @returns {Promise<{ total: number, items: { id: string, title: string, fileName: string, vivaldiId: string | null, pages: number | null }[] }>}
  */
 export async function fetchSearchResults(search) {
+  const token = await fetchGuestToken()
   const items = new Map()
   let total = 0
 
   for (let offset = 0; offset === 0 || offset < total; offset += PAGE_SIZE) {
     if (offset > 0) await sleep(PAGE_DELAY_MS)
 
-    const results = await fetchResultsPage(search, offset)
+    const results = await fetchResultsPage(search, offset, token)
     total = results.info.total
     for (const item of results.docs.map(toItem)) items.set(item.id, item)
 

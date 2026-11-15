@@ -2,9 +2,9 @@ const MAX_ATTEMPTS = 3
 const MAX_CONSECUTIVE_FAILURES = 8
 const BASE_COOLDOWN_MS = 15_000
 const MAX_COOLDOWN_MS = 5 * 60_000
-const START_JITTER_MS = 2000
+import { setTimeout as sleep } from 'timers/promises'
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const START_JITTER_MS = 2000
 
 /**
  * Run task(item) for every item with `workers` running in parallel.
