@@ -164,13 +164,16 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
     return { name: search.name, line: 'no results', ok: true }
   }
 
-  const counts =
-    (maxPages === Infinity ? '' : `${groups.tooBig.length} too big (over ${maxPages} pages), `) +
-    `${groups.notOnline.length} not available online`
+  const skipped = [
+    [groups.tooBig.length, `${groups.tooBig.length} too big (over ${maxPages} pages)`],
+    [groups.notOnline.length, `${groups.notOnline.length} not available online`],
+  ]
+    .filter(([n]) => n > 0)
+    .map(([, text]) => text)
 
   log(
     `[${search.name}] ${results.items.length} results: ${groups.downloaded.length} already downloaded,`,
-    `${groups.download.length} to download, ${counts}`,
+    `${groups.download.length} to download` + (skipped.length ? `, ${skipped.join(', ')}` : ''),
   )
 
   let downloaded = groups.downloaded.length
@@ -216,7 +219,7 @@ async function processSearch(search, { out, workers, maxPages, prepareTimeout, d
     `${downloaded}/${downloadable} downloaded` +
     (failed.length ? `, ${failed.length} failed` : '') +
     (notPrepared.length ? `, ${notPrepared.length} too big to prepare in ${prepareTimeout / 1000}s (add --big)` : '') +
-    `; ${counts}`
+    (skipped.length ? `; ${skipped.join(', ')}` : '')
   return { name: search.name, line, ok: failed.length === 0, aborted }
 }
 
