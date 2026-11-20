@@ -70,52 +70,61 @@ export async function downloadDocument(item, dir, { prepareTimeout, onPartReady 
   const registered = await (await post('registerdownload')).text()
   if (registered) throw new Error(`Download refused: ${refusalReason(registered)}`)
 
-  // This request only returns once everything is prepared; progress comes from polling instead
-  const preparing = new AbortController()
-  request(`${base}/preparedownload`, { signal: preparing.signal }).catch(() => {})
-
-  const deadline = Date.now() + prepareTimeout
-  let progress = { PartsReady: 0 }
-
   try {
-    while (!progress.Done) {
-      if (Date.now() > deadline) {
-        await post('canceldownload').catch(() => {})
-        throw new PrepareTimeoutError(
-          `Not prepared after ${prepareTimeout / 1000}s (part ${progress.PartsReady + 1} at ${progress.PercentReady ?? 0}%)`,
-        )
-      }
-
-      await sleep(POLL_INTERVAL_MS)
-      const partsBefore = progress.PartsReady
-      progress = await (await post('downloadprogress')).json()
-
-      if (progress.somethingWrong) throw new Error('The site failed to prepare the file')
-      if (!progress.Done && progress.PartsReady > partsBefore) onPartReady(progress.PartsReady)
-    }
-  } finally {
-    preparing.abort()
-  }
-
-  await fs.mkdir(dir, { recursive: true })
-
-  const parts = progress.PartsReady
-  const files = []
-
-  try {
-    for (let part = 0; part < parts; part++) {
-      const filePath = path.join(dir, `${partFileName(item.fileName, part, parts)}.pdf`)
-      files.push(filePath)
-
-      const response = await request(`${base}/partfile?part=${part}`)
-      await pipeline(Readable.fromWeb(response.body), createWriteStream(filePath + '.part'))
-    }
+    return await prepareAndSave()
   } catch (err) {
-    await Promise.all(files.map((filePath) => fs.rm(filePath + '.part', { force: true })))
+    // A failed download must not keep holding its slot in the site's download queue
+    await post('canceldownload').catch(() => {})
     throw err
   }
 
-  for (const filePath of files) await fs.rename(filePath + '.part', filePath)
+  async function prepareAndSave() {
+    // This request only returns once everything is prepared; progress comes from polling instead
+    const preparing = new AbortController()
+    request(`${base}/preparedownload`, { signal: preparing.signal }).catch(() => {})
 
-  return parts
+    const deadline = Date.now() + prepareTimeout
+    let progress = { PartsReady: 0 }
+
+    try {
+      while (!progress.Done) {
+        if (Date.now() > deadline) {
+          throw new PrepareTimeoutError(
+            `Not prepared after ${prepareTimeout / 1000}s (part ${progress.PartsReady + 1} at ${progress.PercentReady ?? 0}%)`,
+          )
+        }
+
+        await sleep(POLL_INTERVAL_MS)
+        const partsBefore = progress.PartsReady
+        progress = await (await post('downloadprogress')).json()
+
+        if (progress.somethingWrong) throw new Error('The site failed to prepare the file')
+        if (!progress.Done && progress.PartsReady > partsBefore) onPartReady(progress.PartsReady)
+      }
+    } finally {
+      preparing.abort()
+    }
+
+    await fs.mkdir(dir, { recursive: true })
+
+    const parts = progress.PartsReady
+    const files = []
+
+    try {
+      for (let part = 0; part < parts; part++) {
+        const filePath = path.join(dir, `${partFileName(item.fileName, part, parts)}.pdf`)
+        files.push(filePath)
+
+        const response = await request(`${base}/partfile?part=${part}`)
+        await pipeline(Readable.fromWeb(response.body), createWriteStream(filePath + '.part'))
+      }
+    } catch (err) {
+      await Promise.all(files.map((filePath) => fs.rm(filePath + '.part', { force: true })))
+      throw err
+    }
+
+    for (const filePath of files) await fs.rename(filePath + '.part', filePath)
+
+    return parts
+  }
 }
