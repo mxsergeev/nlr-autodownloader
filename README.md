@@ -103,16 +103,19 @@ nlr ocr downloads --out ocr
 nlr ocr downloads --out ocr --watch
 ```
 
-| Option         | Default                                                 | Description                                                 |
-| -------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
-| `-o, --out`    |                                                         | Output directory (required)                                 |
-| `-y, --years`  | `1901-1918`                                             | Years of the `<name>_<year>` folders to OCR                 |
-| `-w, --watch`  |                                                         | Look for new files every 5 min instead of stopping          |
-| `--chunk`      | `1`                                                     | Pages per FineReader job; more pages per job gave worse OCR |
-| `--day-ram`    | `20`                                                    | GB of RAM for FineReader by day, on 16 CPUs                 |
-| `--night-ram`  | `36`                                                    | GB of RAM for FineReader at night, on all CPUs              |
-| `--night`      | `0-8`                                                   | Night hours                                                 |
-| `--finereader` | `C:\Software\ABBYY FineReader PDF 16\FineReaderOCR.exe` | FineReader's command line tool                              |
+| Option         | Default                                                 | Description                                                   |
+| -------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
+| `-o, --out`    |                                                         | Output directory (required)                                   |
+| `-y, --years`  | `1901-1918`                                             | Years of the `<name>_<year>` folders to OCR                   |
+| `-w, --watch`  |                                                         | Look for new files every 5 min instead of stopping            |
+| `--chunk`      | `1`                                                     | Pages per FineReader job; more pages per job gave worse OCR   |
+| `--day-ram`    | `20`                                                    | GB of RAM for FineReader by day                               |
+| `--night-ram`  | `36`                                                    | GB of RAM for FineReader at night                             |
+| `--day-cpus`   | `16`                                                    | CPU threads for FineReader by day                             |
+| `--night-cpus` | all                                                     | CPU threads for FineReader at night                           |
+| `--night`      | `0-8`                                                   | Night hours                                                   |
+| `--settings`   |                                                         | JSON file that overrides the limits above, re-read every 10 s |
+| `--finereader` | `C:\Software\ABBYY FineReader PDF 16\FineReaderOCR.exe` | FineReader's command line tool                                |
 
 - FineReader's image preprocessing must be set to deskew and ISO noise reduction only (orientation correction may stay on). `nlr ocr` checks this at start and refuses otherwise; keep FineReader's window closed while it runs.
 - Jobs start while they fit into the RAM budget (about 2 GB per one-page job) and leave Windows at least 6 GB free; below 3 GB free the youngest job is stopped and queued again.
@@ -137,3 +140,23 @@ nlr bind ocr --out tomes
 - The date is the first one in the issue's name; for 1918 that is the old-style date (`8 (21) мая` → 8 May).
 - Pages, images and text are copied unchanged. The tome is written one issue at a time, so memory stays low (a few hundred MB) however big it gets; a quarter is about 3 GB.
 - Existing tomes are skipped. The log is `<out>/nlr-bind.log`.
+
+## Nextcloud and the web page
+
+`scripts/nextcloud-ocr-transport.js` moves the work between Nextcloud and this PC, one year folder at a time, and `scripts/nlr-ui.js` is a small web page that runs it together with `nlr ocr`:
+
+```sh
+node scripts/nlr-ui.js --in D:\nlr --ocr D:\nlr-ocr --tomes D:\nlr-tomes
+# then open http://localhost:8080
+```
+
+The page starts and stops both, shows each year folder's progress and both logs, and changes FineReader's RAM, CPU threads and night hours while it runs (saved in `<tomes>/nlr-settings.json`, which both re-read; running jobs finish with the old limits). It is only reachable from this PC. Stopping OCR also stops FineReader; an interrupted issue is OCRed again on the next start.
+
+For each `<folder>_<year>` on Nextcloud (`nlr/` by default) the transport:
+
+1. downloads the originals that aren't in `--in` yet, while fewer than 2 (`ahead`) folders wait for OCR and at least 20 GB of disk stay free. The issue list, `.results.json`, must already be in `--in/<folder>/`; `nlr <query> --years <y> --dry-run --out <in>` makes it without downloading anything.
+2. binds the quarters once every listed issue is OCRed,
+3. uploads the tomes, then the issue list, to `nlr/ocr/<folder>/` (in 100 MB chunks; each upload's size is checked),
+4. deletes the folder's originals, OCRed issues and tomes here, but only if every original here is on Nextcloud with the same size. Otherwise it keeps them and says why.
+
+It never deletes anything on Nextcloud. The credentials are read from `~/.nextcloud-dav.json` (`{ "url", "user", "password" }`) and never logged. Run `node scripts/nextcloud-ocr-transport.js --help` for its options; it logs to `<tomes>/nlr-transport.log`.

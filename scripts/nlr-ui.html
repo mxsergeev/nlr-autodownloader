@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>NLR OCR</title>
+    <style>
+      body {
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+        margin: 1.5em auto;
+        max-width: 1100px;
+        padding: 0 1em;
+        color: #222;
+      }
+      h1 {
+        font-size: 1.4em;
+        margin: 0 0 0.5em;
+      }
+      h2 {
+        font-size: 1.1em;
+        margin: 1.5em 0 0.5em;
+      }
+      section {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 0.8em 1em;
+        margin-bottom: 1em;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.25em 0.6em;
+        border-bottom: 1px solid #eee;
+        white-space: nowrap;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+      }
+      td.note {
+        white-space: normal;
+        color: #a40;
+      }
+      .running {
+        color: #070;
+        font-weight: 600;
+      }
+      .stopped {
+        color: #a00;
+        font-weight: 600;
+      }
+      .done {
+        color: #070;
+      }
+      .muted {
+        color: #888;
+      }
+      .bar {
+        background: #eee;
+        border-radius: 3px;
+        height: 8px;
+        width: 120px;
+        display: inline-block;
+        vertical-align: middle;
+      }
+      .bar > div {
+        background: #4a8;
+        height: 100%;
+        border-radius: 3px;
+      }
+      pre {
+        background: #f6f6f6;
+        padding: 0.6em;
+        max-height: 18em;
+        overflow: auto;
+        font-size: 12px;
+        white-space: pre-wrap;
+        margin: 0;
+      }
+      pre .warn {
+        color: #a40;
+      }
+      pre .error {
+        color: #c00;
+      }
+      label {
+        display: inline-block;
+        margin: 0 1.2em 0.4em 0;
+      }
+      input {
+        width: 4.5em;
+      }
+      button {
+        padding: 0.3em 0.9em;
+        margin-right: 0.4em;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1em;
+      }
+      #error {
+        color: #c00;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>NLR OCR</h1>
+    <p id="error"></p>
+
+    <section>
+      <div id="system"></div>
+      <table id="processes"></table>
+    </section>
+
+    <section>
+      <form id="settings">
+        <label>RAM by day <input name="dayRam" type="number" min="1" /> GB</label>
+        <label>CPU threads by day <input name="dayCpus" type="number" min="1" /></label>
+        <label>RAM at night <input name="nightRam" type="number" min="1" /> GB</label>
+        <label>CPU threads at night <input name="nightCpus" type="number" min="1" /></label>
+        <label>Night hours <input name="night" type="text" placeholder="0-8" /></label>
+        <label>Years waiting for OCR <input name="ahead" type="number" min="1" /></label>
+        <button type="submit">Save</button>
+        <span id="saved" class="muted"></span>
+      </form>
+      <p class="muted">Changes apply within a few seconds; jobs already running finish with the old limits.</p>
+    </section>
+
+    <section>
+      <div id="overall"></div>
+      <div id="transfer" class="muted"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Folder</th>
+            <th>Step</th>
+            <th class="num">Issues</th>
+            <th class="num">Originals here</th>
+            <th>OCRed</th>
+            <th class="num">Tomes here</th>
+            <th class="num">On Nextcloud</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="folders"></tbody>
+      </table>
+    </section>
+
+    <div class="grid">
+      <div>
+        <h2>OCR log</h2>
+        <pre id="log-ocr"></pre>
+      </div>
+      <div>
+        <h2>Transport log</h2>
+        <pre id="log-transport"></pre>
+      </div>
+    </div>
+
+    <script>
+      const GB = 2 ** 30
+      const $ = (id) => document.getElementById(id)
+      const escape = (text) =>
+        String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+      const gb = (bytes) => (bytes == null ? '?' : (bytes / GB).toFixed(1) + ' GB')
+      const NAMES = { ocr: 'OCR (nlr ocr)', transport: 'Nextcloud transport' }
+      const STEPS = {
+        'not here': 'not started',
+        waiting: 'waiting to download',
+        downloading: 'downloading',
+        ocr: 'OCR',
+        binding: 'binding',
+        uploading: 'uploading',
+        done: 'done',
+        'no issue list': 'no issue list',
+      }
+      let settingsLoaded = false
+
+      async function post(url, body) {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        })
+        const answer = await res.json()
+        if (!res.ok) throw new Error(answer.error)
+        return answer
+      }
+
+      async function control(action, name) {
+        if (action === 'stop' && !confirm(`Stop ${NAMES[name]}?`)) return
+        await post(`/api/${action}/${name}`)
+        refresh()
+      }
+
+      function render(s) {
+        const fr = s.system.finereader
+        $('system').innerHTML =
+          `<b>${s.system.mode === 'night' ? 'Night' : 'Day'}</b> (night ${escape(s.settings.night)} h) · ` +
+          `free RAM ${gb(s.system.freeRam)} of ${gb(s.system.totalRam)} · free disk ${gb(s.system.freeDisk)} · ` +
+          (fr ? `FineReader: ${fr.jobs} job(s), ${gb(fr.ram)}` : '')
+
+        $('processes').innerHTML = Object.entries(s.processes)
+          .map(
+            ([name, p]) =>
+              `<tr><td>${NAMES[name]}</td>` +
+              (p.running
+                ? `<td class="running">running</td><td class="muted">since ${new Date(p.startedAt).toLocaleString()}</td>` +
+                  `<td><button onclick="control('stop', '${name}')">Stop</button></td>`
+                : `<td class="stopped">stopped</td><td class="muted">${p.exitCode == null ? '' : 'exit ' + escape(p.exitCode)}</td>` +
+                  `<td><button onclick="control('start', '${name}')">Start</button></td>`) +
+              '</tr>',
+          )
+          .join('')
+
+        if (!settingsLoaded) {
+          for (const [key, value] of Object.entries(s.settings)) {
+            const input = $('settings').elements[key]
+            if (input) input.value = value
+          }
+          settingsLoaded = true
+        }
+
+        const t = s.transport
+        const folders = Object.entries(t?.folders ?? {})
+        const done = folders.filter(([, f]) => f.step === 'done').length
+        $('overall').innerHTML = t
+          ? `<b>${done} of ${folders.length}</b> year folders done · transport last checked ${new Date(t.updated).toLocaleString()}`
+          : '<span class="muted">The transport hasn\'t run yet.</span>'
+
+        const x = t?.transfer
+        $('transfer').textContent = x
+          ? `${x.action === 'upload' ? 'Uploading' : 'Downloading'} ${x.name}: ${gb(x.bytes)} of ${gb(x.size)}`
+          : ''
+
+        $('folders').innerHTML = folders
+          .map(([name, f]) => {
+            const share = f.listed ? f.ocred / f.listed : 0
+            const ocr =
+              f.step === 'done'
+                ? ''
+                : `<span class="bar"><div style="width:${(share * 100).toFixed(0)}%"></div></span> ${f.ocred}/${f.listed}`
+            return (
+              `<tr><td>${escape(name)}</td><td class="${f.step === 'done' ? 'done' : ''}">${escape(STEPS[f.step] ?? f.step)}</td>` +
+              `<td class="num">${f.step === 'done' && !f.listed ? '' : f.listed}</td><td class="num">${f.originals || ''}</td>` +
+              `<td>${ocr}</td><td class="num">${f.tomes || ''}</td><td class="num">${f.uploaded ?? ''}</td>` +
+              `<td class="note">${escape(f.note)}</td></tr>`
+            )
+          })
+          .join('')
+
+        for (const name of ['ocr', 'transport']) {
+          const pre = $('log-' + name)
+          const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 5
+          pre.innerHTML = s.logs[name]
+            .map((line) => {
+              const kind = line.includes(' ERROR ') ? 'error' : line.includes(' WARN ') ? 'warn' : ''
+              return `<span class="${kind}">${escape(line)}</span>`
+            })
+            .join('\n')
+          if (atBottom) pre.scrollTop = pre.scrollHeight
+        }
+      }
+
+      async function refresh() {
+        try {
+          const res = await fetch('/api/status')
+          render(await res.json())
+          $('error').textContent = ''
+        } catch (err) {
+          $('error').textContent = `Can't reach the UI server: ${err.message}`
+        }
+      }
+
+      $('settings').addEventListener('submit', async (event) => {
+        event.preventDefault()
+        try {
+          const saved = await post('/api/settings', Object.fromEntries(new FormData(event.target)))
+          for (const [key, value] of Object.entries(saved)) event.target.elements[key].value = value
+          $('saved').textContent = 'Saved ' + new Date().toLocaleTimeString()
+        } catch (err) {
+          $('saved').textContent = err.message
+        }
+      })
+
+      refresh()
+      setInterval(refresh, 3000)
+    </script>
+  </body>
+</html>
