@@ -34,58 +34,72 @@ export async function runBind({ inDir, outDir, years }) {
   for (const dir of await fs.readdir(inDir, { withFileTypes: true })) {
     const year = Number(dir.name.match(/_(\d{4})$/)?.[1])
     if (!dir.isDirectory() || !years.includes(year)) continue
-    const folder = dir.name
 
-    const results = await readResults(path.join(inDir, folder))
-    if (!results) {
-      error(`[${folder}] No .results.json, can't tell which issues belong to it. Skipped.`)
-      counts.failed++
-      continue
-    }
-
-    const issues = results.items
-      .filter((item) => item.vivaldiId)
-      .map((item) => ({ ...item, date: issueDate(item.fileName) }))
-    const undated = issues.filter((issue) => !issue.date)
-    if (undated.length) {
-      error(`[${folder}] No date in the name of: ${undated.map((issue) => issue.fileName).join('; ')}. Skipped.`)
-      counts.failed++
-      continue
-    }
-
-    issues.sort((a, b) => byDate(a.date, b.date))
-
-    for (const [quarter, name] of QUARTERS.entries()) {
-      const tome = issues.filter((issue) => Math.floor(issue.date.month / 3) === quarter)
-      if (!tome.length) continue
-
-      const title = paperTitle(tome[0].fileName) ?? folder
-      const out = path.join(outDir, folder, `${title} ${year}, ${name}.pdf`)
-      if (await exists(out)) continue
-
-      const files = tome.map((issue) => path.join(inDir, folder, `${issue.fileName}.pdf`))
-      const missing = (await Promise.all(files.map(exists))).filter((found) => !found).length
-      if (missing) {
-        log(`[${folder}] ${name}: ${missing} of ${tome.length} issues not there yet`)
-        counts.waiting++
-        continue
-      }
-
-      try {
-        const started = Date.now()
-        const parts = tome.map((issue, i) => ({ file: files[i], title: bookmarkTitle(issue.fileName) }))
-        const pages = await bindPdfs(parts, out)
-        counts.bound++
-        const minutes = ((Date.now() - started) / 60_000).toFixed(1)
-        log(`[${folder}] ${tome.length} issues, ${pages} p. in ${minutes} min  ${path.basename(out)}`)
-      } catch (err) {
-        error(`[${folder}] Not bound: ${path.basename(out)}: ${err.message}. Re-run to try again.`)
-        counts.failed++
-      }
-    }
+    const folderCounts = await bindFolder({ inDir, outDir, folder: dir.name })
+    for (const key in counts) counts[key] += folderCounts[key]
   }
 
   log(`Binding done: ${counts.bound} tome(s)` + (counts.waiting ? `, ${counts.waiting} waiting for issues` : ''))
+  return counts
+}
+
+/**
+ * Bind the quarters of one folder, inDir/<folder>_<year>/ → outDir/<folder>/ (see runBind).
+ *
+ * @returns {Promise<{ bound: number, waiting: number, failed: number }>}
+ */
+export async function bindFolder({ inDir, outDir, folder }) {
+  const counts = { bound: 0, waiting: 0, failed: 0 }
+  const year = Number(folder.match(/_(\d{4})$/)[1])
+
+  const results = await readResults(path.join(inDir, folder))
+  if (!results) {
+    error(`[${folder}] No .results.json, can't tell which issues belong to it. Skipped.`)
+    counts.failed++
+    return counts
+  }
+
+  const issues = results.items
+    .filter((item) => item.vivaldiId)
+    .map((item) => ({ ...item, date: issueDate(item.fileName) }))
+  const undated = issues.filter((issue) => !issue.date)
+  if (undated.length) {
+    error(`[${folder}] No date in the name of: ${undated.map((issue) => issue.fileName).join('; ')}. Skipped.`)
+    counts.failed++
+    return counts
+  }
+
+  issues.sort((a, b) => byDate(a.date, b.date))
+
+  for (const [quarter, name] of QUARTERS.entries()) {
+    const tome = issues.filter((issue) => Math.floor(issue.date.month / 3) === quarter)
+    if (!tome.length) continue
+
+    const title = paperTitle(tome[0].fileName) ?? folder
+    const out = path.join(outDir, folder, `${title} ${year}, ${name}.pdf`)
+    if (await exists(out)) continue
+
+    const files = tome.map((issue) => path.join(inDir, folder, `${issue.fileName}.pdf`))
+    const missing = (await Promise.all(files.map(exists))).filter((found) => !found).length
+    if (missing) {
+      log(`[${folder}] ${name}: ${missing} of ${tome.length} issues not there yet`)
+      counts.waiting++
+      continue
+    }
+
+    try {
+      const started = Date.now()
+      const parts = tome.map((issue, i) => ({ file: files[i], title: bookmarkTitle(issue.fileName) }))
+      const pages = await bindPdfs(parts, out)
+      counts.bound++
+      const minutes = ((Date.now() - started) / 60_000).toFixed(1)
+      log(`[${folder}] ${tome.length} issues, ${pages} p. in ${minutes} min  ${path.basename(out)}`)
+    } catch (err) {
+      error(`[${folder}] Not bound: ${path.basename(out)}: ${err.message}. Re-run to try again.`)
+      counts.failed++
+    }
+  }
+
   return counts
 }
 
