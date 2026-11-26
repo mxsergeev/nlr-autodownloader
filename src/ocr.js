@@ -12,7 +12,6 @@ const JOB_RAM = 1 * GB // FineReader per job,
 const PAGE_RAM = 1 * GB // plus this per page in it
 const MIN_FREE_RAM = 6 * GB // don't start a job that would leave Windows less than this
 const KILL_FREE_RAM = 3 * GB // below this, stop the youngest job and queue it again
-const DAY_CPU_MASK = 0xffff // the first 16 logical CPUs
 const CHECK_MS = 10_000
 const RESCAN_MS = 5 * 60_000
 const JOB_TIMEOUT_MS = 15 * 60_000
@@ -22,12 +21,13 @@ const TMP_DIR = '.ocr-tmp'
 /**
  * OCR every PDF in inDir/<folder>_<year>/ (year in years) into outDir/<folder>/ under the same name. FineReader OCRs chunks of
  * `chunk` pages; its text is put onto the original pages (see graft.js), so the scans stay as they are. Files that already exist
- * in outDir are skipped. FineReader may use dayRam GB and 16 CPUs, or nightRam GB and all CPUs between night[0] and night[1] h.
- * With watch, it keeps looking for new files every few minutes instead of stopping when all are done.
+ * in outDir are skipped. FineReader may use dayRam GB and the first dayCpus CPUs, or nightRam GB and nightCpus CPUs between
+ * night[0] and night[1] h. A settings file (JSON with any of dayRam, nightRam, dayCpus, nightCpus, night: "0-8") is re-read every
+ * few seconds and overrides these. With watch, it keeps looking for new files every few minutes instead of stopping.
  *
  * @returns {Promise<{ done: number, failed: number }>}
  */
-export async function runOcr({ inDir, outDir, years, chunk, dayRam, nightRam, night, watch, finereader }) {
+export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimits, settingsFile, watch, finereader }) {
   await checkSettings()
 
   const tmp = path.join(outDir, TMP_DIR)
@@ -41,6 +41,8 @@ export async function runOcr({ inDir, outDir, years, chunk, dayRam, nightRam, ni
   let measured = { ram: 0, gui: false }
   let lastCheck = 0
   let lastMode = null
+  let limits = initialLimits
+  let settingsText = null
   let guiWarned = false
   let grafting = Promise.resolve() // one graft at a time: it is CPU and memory heavy
   let nextId = 0
@@ -49,13 +51,30 @@ export async function runOcr({ inDir, outDir, years, chunk, dayRam, nightRam, ni
 
   const isNight = () => {
     const hour = new Date().getHours()
-    const [from, to] = night
+    const [from, to] = limits.night
     return from <= to ? hour >= from && hour < to : hour >= from || hour < to
   }
-  const mode = () =>
-    isNight()
-      ? { name: 'night', ram: nightRam * GB, mask: 2 ** os.availableParallelism() - 1, cpus: os.availableParallelism() }
-      : { name: 'day', ram: dayRam * GB, mask: DAY_CPU_MASK, cpus: 16 }
+  const mode = () => {
+    const [name, ram, cpus] = isNight()
+      ? ['night', limits.nightRam, limits.nightCpus]
+      : ['day', limits.dayRam, limits.dayCpus]
+    return { name, ram: ram * GB, cpus, mask: 2 ** cpus - 1 } // the first `cpus` logical CPUs
+  }
+
+  /** Take changed limits from the settings file; a broken file is reported once and changes nothing. */
+  async function readSettings() {
+    const text = await fs.readFile(settingsFile, 'utf8').catch(() => null)
+    if (text === null || text === settingsText) return
+    settingsText = text
+    try {
+      const updated = parseLimits(JSON.parse(text), limits)
+      if (JSON.stringify(updated) === JSON.stringify(limits)) return
+      limits = updated
+      lastMode = null // log the limits again
+    } catch (err) {
+      warn(`Ignoring ${settingsFile}: ${err.message}`)
+    }
+  }
   const jobRam = JOB_RAM + chunk * PAGE_RAM // the last chunk of an issue may be smaller; close enough
 
   async function scan() {
@@ -164,11 +183,13 @@ export async function runOcr({ inDir, outDir, years, chunk, dayRam, nightRam, ni
   async function check() {
     if (Date.now() - lastCheck < CHECK_MS) return
     lastCheck = Date.now()
+    if (settingsFile) await readSettings()
 
     const current = mode()
     if (current.name !== lastMode) {
       log(
-        `${current.name === 'night' ? 'Night' : 'Day'}: up to ${current.ram / GB} GB and ${current.cpus} CPUs for FineReader`,
+        `${current.name === 'night' ? 'Night' : 'Day'}: up to ${current.ram / GB} GB and ${current.cpus} CPUs for FineReader` +
+          ` (night ${limits.night.join('-')} h)`,
       )
       lastMode = current.name
     }
@@ -232,6 +253,38 @@ export async function runOcr({ inDir, outDir, years, chunk, dayRam, nightRam, ni
   await removeDir(tmp)
   log(`OCR done: ${counts.done} file(s)` + (counts.failed ? `, ${counts.failed} failed` : ''))
   return counts
+}
+
+/**
+ * Check FineReader's limits: dayRam, nightRam (GB), dayCpus, nightCpus and night ("0-8" or [0, 8]). Missing ones come from base.
+ *
+ * @returns {{ dayRam: number, nightRam: number, dayCpus: number, nightCpus: number, night: number[] }}
+ */
+export function parseLimits(values, base = {}) {
+  const cpus = os.availableParallelism()
+  const number = (key, max) => {
+    const value = Number(values[key] ?? base[key])
+    if (!Number.isInteger(value) || value < 1 || value > max)
+      throw new Error(`${key} must be a whole number from 1 to ${max}`)
+    return value
+  }
+
+  const night = values.night ?? base.night
+  const hours = Array.isArray(night)
+    ? night
+    : String(night)
+        .match(/^(\d{1,2})-(\d{1,2})$/)
+        ?.slice(1)
+        .map(Number)
+  if (!hours || hours.some((hour) => hour > 24)) throw new Error(`night must be hours like 0-8, not "${night}"`)
+
+  return {
+    dayRam: number('dayRam', 1024),
+    nightRam: number('nightRam', 1024),
+    dayCpus: number('dayCpus', cpus),
+    nightCpus: number('nightCpus', cpus),
+    night: hours,
+  }
 }
 
 /** PDFs in inDir/<folder>_<year>/ with year in years that don't exist in outDir/<folder>/ yet. */

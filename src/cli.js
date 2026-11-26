@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
+import os from 'os'
 import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
@@ -9,7 +10,7 @@ import { downloadDocument, PrepareTimeoutError } from './download.js'
 import { DEFAULT_FINEREADER } from './finereader.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
 import { error, log, report, setLogFile, warn } from './log.js'
-import { runOcr } from './ocr.js'
+import { parseLimits, runOcr } from './ocr.js'
 import { runPool } from './pool.js'
 import { fetchSearchResults, querySearch, urlSearch } from './search.js'
 
@@ -42,9 +43,13 @@ Options:
   -y, --years <y>       Year or range of the folders to OCR (default: 1901-1918)
   -w, --watch           Keep looking for new files every 5 min instead of stopping
       --chunk <n>       Pages per FineReader job (default: 1; more pages per job gave worse OCR)
-      --day-ram <gb>    RAM for FineReader by day, on 16 CPUs (default: 20)
-      --night-ram <gb>  RAM for FineReader at night, on all CPUs (default: 36)
+      --day-ram <gb>    RAM for FineReader by day (default: 20)
+      --night-ram <gb>  RAM for FineReader at night (default: 36)
+      --day-cpus <n>    CPU threads for FineReader by day (default: 16)
+      --night-cpus <n>  CPU threads for FineReader at night (default: all)
       --night <h-h>     Night hours (default: 0-8)
+      --settings <file> JSON with any of dayRam, nightRam, dayCpus, nightCpus, night ("0-8"); re-read every
+                        10 s and overrides the options above, e.g. to change the limits while it runs
       --finereader <exe>  FineReaderOCR.exe (default: ${DEFAULT_FINEREADER})
   -h, --help            Show this help
 
@@ -331,7 +336,10 @@ async function ocrMain(args) {
       chunk: { type: 'string', default: '1' },
       'day-ram': { type: 'string', default: '20' },
       'night-ram': { type: 'string', default: '36' },
+      'day-cpus': { type: 'string', default: '16' },
+      'night-cpus': { type: 'string' },
       night: { type: 'string', default: '0-8' },
+      settings: { type: 'string' },
       finereader: { type: 'string', default: DEFAULT_FINEREADER },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -347,11 +355,18 @@ async function ocrMain(args) {
   const outDir = path.resolve(values.out)
   if (inDir === outDir) throw new UsageError('--out must be a different directory than the downloads dir')
 
-  const night = values.night
-    .match(/^(\d{1,2})-(\d{1,2})$/)
-    ?.slice(1)
-    .map(Number)
-  if (!night || night.some((h) => h > 24)) throw new UsageError(`Invalid --night "${values.night}", expected e.g. 0-8`)
+  let limits
+  try {
+    limits = parseLimits({
+      dayRam: values['day-ram'],
+      nightRam: values['night-ram'],
+      dayCpus: values['day-cpus'],
+      nightCpus: values['night-cpus'] ?? os.availableParallelism(),
+      night: values.night,
+    })
+  } catch (err) {
+    throw new UsageError(`Invalid limits: ${err.message}`)
+  }
 
   await fs.mkdir(outDir, { recursive: true })
   setLogFile(path.join(outDir, 'nlr-ocr.log'))
@@ -361,9 +376,8 @@ async function ocrMain(args) {
     outDir,
     years: parseYears(values.years),
     chunk: parsePositiveInt(values.chunk, '--chunk'),
-    dayRam: parsePositiveInt(values['day-ram'], '--day-ram'),
-    nightRam: parsePositiveInt(values['night-ram'], '--night-ram'),
-    night,
+    limits,
+    settingsFile: values.settings && path.resolve(values.settings),
     watch: values.watch,
     finereader: values.finereader,
   })
