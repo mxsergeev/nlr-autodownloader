@@ -90,3 +90,31 @@ The exit code is `0` when everything selected was downloaded, `1` if anything fa
 ## Rate limiting
 
 Downloads run in parallel. When a download fails, all workers pause for a shared cooldown (15 s, doubling on each failure in a row, max 5 min) and the document is retried later (up to 3 attempts). After 8 failures in a row the run stops; re-run later to resume.
+
+## OCR
+
+`nlr ocr` makes downloaded PDFs searchable with ABBYY FineReader PDF 16 (Windows), keeping NLR's original scans: FineReader only supplies the text, which is put invisibly onto the original pages. Pages that already have NLR's text (1917–1918) keep it.
+
+```sh
+# The 1901–1918 folders of ./downloads into ./ocr/<folder>/, same file names
+nlr ocr downloads --out ocr
+
+# Keep running and pick up new downloads every 5 min
+nlr ocr downloads --out ocr --watch
+```
+
+| Option         | Default                                                 | Description                                                 |
+| -------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
+| `-o, --out`    |                                                         | Output directory (required)                                 |
+| `-y, --years`  | `1901-1918`                                             | Years of the `<name>_<year>` folders to OCR                 |
+| `-w, --watch`  |                                                         | Look for new files every 5 min instead of stopping          |
+| `--chunk`      | `1`                                                     | Pages per FineReader job; more pages per job gave worse OCR |
+| `--day-ram`    | `20`                                                    | GB of RAM for FineReader by day, on 16 CPUs                 |
+| `--night-ram`  | `36`                                                    | GB of RAM for FineReader at night, on all CPUs              |
+| `--night`      | `0-8`                                                   | Night hours                                                 |
+| `--finereader` | `C:\Software\ABBYY FineReader PDF 16\FineReaderOCR.exe` | FineReader's command line tool                              |
+
+- FineReader's image preprocessing must be set to deskew and ISO noise reduction only (orientation correction may stay on). `nlr ocr` checks this at start and refuses otherwise; keep FineReader's window closed while it runs.
+- Jobs start while they fit into the RAM budget (about 2 GB per one-page job) and leave Windows at least 6 GB free; below 3 GB free the youngest job is stopped and queued again.
+- A failed job is retried once. Files that still fail are logged and tried again on the next run. Finished files are skipped, so re-running resumes.
+- The log is `<out>/nlr-ocr.log`. The exit code is `0` when everything was OCRed, `1` if anything failed, `2` on invalid arguments.

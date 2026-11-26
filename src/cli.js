@@ -5,8 +5,10 @@ import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
 import { downloadDocument, PrepareTimeoutError } from './download.js'
+import { DEFAULT_FINEREADER } from './finereader.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
 import { error, log, report, setLogFile, warn } from './log.js'
+import { runOcr } from './ocr.js'
 import { runPool } from './pool.js'
 import { fetchSearchResults, querySearch, urlSearch } from './search.js'
 
@@ -25,7 +27,25 @@ Options:
   -o, --out <dir>       Output directory (default: ./downloads)
   -h, --help            Show this help
 
-Re-running the same command resumes: finished files are skipped.`
+Re-running the same command resumes: finished files are skipped.
+OCR downloaded files with FineReader: nlr ocr --help`
+
+const OCR_USAGE = `Usage:
+  nlr ocr <downloads dir> --out <dir> [options]
+
+Makes the PDFs in <downloads dir>/<folder>_<year>/ searchable with ABBYY FineReader into <dir>/<folder>/,
+keeping the original scans. Files that already exist in <dir> are skipped.
+
+Options:
+  -o, --out <dir>       Output directory (required, not the downloads dir)
+  -y, --years <y>       Year or range of the folders to OCR (default: 1901-1918)
+  -w, --watch           Keep looking for new files every 5 min instead of stopping
+      --chunk <n>       Pages per FineReader job (default: 1; more pages per job gave worse OCR)
+      --day-ram <gb>    RAM for FineReader by day, on 16 CPUs (default: 20)
+      --night-ram <gb>  RAM for FineReader at night, on all CPUs (default: 36)
+      --night <h-h>     Night hours (default: 0-8)
+      --finereader <exe>  FineReaderOCR.exe (default: ${DEFAULT_FINEREADER})
+  -h, --help            Show this help`
 
 const RESULTS_VERSION = 4
 const SEARCH_ATTEMPTS = 3
@@ -285,6 +305,56 @@ async function main() {
   return complete ? 0 : 1
 }
 
+async function ocrMain(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      out: { type: 'string', short: 'o' },
+      years: { type: 'string', short: 'y', default: '1901-1918' },
+      watch: { type: 'boolean', short: 'w', default: false },
+      chunk: { type: 'string', default: '1' },
+      'day-ram': { type: 'string', default: '20' },
+      'night-ram': { type: 'string', default: '36' },
+      night: { type: 'string', default: '0-8' },
+      finereader: { type: 'string', default: DEFAULT_FINEREADER },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+  })
+
+  if (values.help) {
+    console.log(OCR_USAGE)
+    return 0
+  }
+
+  if (positionals.length !== 1 || !values.out) throw new UsageError('Provide the downloads dir and --out')
+  const inDir = path.resolve(positionals[0])
+  const outDir = path.resolve(values.out)
+  if (inDir === outDir) throw new UsageError('--out must be a different directory than the downloads dir')
+
+  const night = values.night
+    .match(/^(\d{1,2})-(\d{1,2})$/)
+    ?.slice(1)
+    .map(Number)
+  if (!night || night.some((h) => h > 24)) throw new UsageError(`Invalid --night "${values.night}", expected e.g. 0-8`)
+
+  await fs.mkdir(outDir, { recursive: true })
+  setLogFile(path.join(outDir, 'nlr-ocr.log'))
+
+  const { failed } = await runOcr({
+    inDir,
+    outDir,
+    years: parseYears(values.years),
+    chunk: parsePositiveInt(values.chunk, '--chunk'),
+    dayRam: parsePositiveInt(values['day-ram'], '--day-ram'),
+    nightRam: parsePositiveInt(values['night-ram'], '--night-ram'),
+    night,
+    watch: values.watch,
+    finereader: values.finereader,
+  })
+  return failed ? 1 : 0
+}
+
 process.umask(0o002) // group-writable files, e.g. for a shared/synced downloads folder
 
 process.on('SIGINT', () => {
@@ -292,11 +362,13 @@ process.on('SIGINT', () => {
   process.exit(130)
 })
 
-main().then(
+const isOcr = process.argv[2] === 'ocr'
+
+;(isOcr ? ocrMain(process.argv.slice(3)) : main()).then(
   (code) => process.exit(code),
   (err) => {
     const isUsageError = err instanceof UsageError || err.code?.startsWith('ERR_PARSE_ARGS')
-    console.error(isUsageError ? `${err.message}\n\n${USAGE}` : err)
+    console.error(isUsageError ? `${err.message}\n\n${isOcr ? OCR_USAGE : USAGE}` : err)
     process.exit(2)
   },
 )
