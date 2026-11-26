@@ -231,6 +231,7 @@ export async function bindPdfs(parts, outFile) {
     throw err
   }
 
+  await handle.sync() // on disk before the rename makes it look done, even if the power goes
   await handle.close()
   await fs.rename(partial, outFile)
   return kids.length

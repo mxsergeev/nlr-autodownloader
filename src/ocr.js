@@ -147,7 +147,13 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
 
       const partial = path.join(path.dirname(issue.out), `.${path.basename(issue.out)}.tmp`)
       await fs.mkdir(path.dirname(issue.out), { recursive: true })
-      await fs.writeFile(partial, bytes)
+      const handle = await fs.open(partial, 'w')
+      try {
+        await handle.writeFile(bytes)
+        await handle.sync() // on disk before the rename makes it look done, even if the power goes
+      } finally {
+        await handle.close()
+      }
       await fs.rename(partial, issue.out)
 
       counts.done++
@@ -169,7 +175,10 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
   function fail(issue, err) {
     issue.error = err
     counts.failed++
-    error(`[${issue.folder}] Not OCRed: ${issue.name}: ${err.message}. Re-run to try again.`)
+    if (watch) taken.delete(issue.out) // the next scan picks it up again
+    error(
+      `[${issue.folder}] Not OCRed: ${issue.name}: ${err.message}. ${watch ? 'Trying again later.' : 'Re-run to try again.'}`,
+    )
 
     for (const job of issue.jobs ?? []) {
       const i = queue.indexOf(job)

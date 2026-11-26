@@ -84,6 +84,7 @@ function nextcloud({ url, user, password }) {
           received += chunk.length
           onProgress(received, size)
         }
+        await handle.sync() // on disk before the rename makes it look done, even if the power goes
       } finally {
         await handle.close()
       }
