@@ -118,3 +118,22 @@ nlr ocr downloads --out ocr --watch
 - Jobs start while they fit into the RAM budget (about 2 GB per one-page job) and leave Windows at least 6 GB free; below 3 GB free the youngest job is stopped and queued again.
 - A failed job is retried once. Files that still fail are logged and tried again on the next run. Finished files are skipped, so re-running resumes.
 - The log is `<out>/nlr-ocr.log`. The exit code is `0` when everything was OCRed, `1` if anything failed, `2` on invalid arguments.
+
+## Binding
+
+`nlr bind` binds the issues of each year folder into one PDF per quarter, with a bookmark per issue (e.g. `№ 172 (25 июня)`), sorted by date. Run it on the OCR output:
+
+```sh
+# ./ocr/<folder>/ → ./tomes/<folder>/Новая Петроградская газета 1912, янв–март.pdf, апр–июнь, июль–сент, окт–дек
+nlr bind ocr --out tomes
+```
+
+| Option        | Default     | Description                                  |
+| ------------- | ----------- | -------------------------------------------- |
+| `-o, --out`   |             | Output directory (required)                  |
+| `-y, --years` | `1901-1918` | Years of the `<name>_<year>` folders to bind |
+
+- A quarter is bound only once every issue the folder's `.results.json` lists for it (with an electronic copy) is there; `nlr ocr` copies that file along. Until then it is logged as waiting.
+- The date is the first one in the issue's name; for 1918 that is the old-style date (`8 (21) мая` → 8 May).
+- Pages, images and text are copied unchanged. The tome is written one issue at a time, so memory stays low (a few hundred MB) however big it gets; a quarter is about 3 GB.
+- Existing tomes are skipped. The log is `<out>/nlr-bind.log`.

@@ -4,6 +4,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
+import { runBind } from './bind.js'
 import { downloadDocument, PrepareTimeoutError } from './download.js'
 import { DEFAULT_FINEREADER } from './finereader.js'
 import { downloadedFileNames, readResults, searchDirName, writeResults } from './files.js'
@@ -45,6 +46,20 @@ Options:
       --night-ram <gb>  RAM for FineReader at night, on all CPUs (default: 36)
       --night <h-h>     Night hours (default: 0-8)
       --finereader <exe>  FineReaderOCR.exe (default: ${DEFAULT_FINEREADER})
+  -h, --help            Show this help
+
+Bind the OCRed issues into one PDF per quarter: nlr bind --help`
+
+const BIND_USAGE = `Usage:
+  nlr bind <dir> --out <dir> [options]
+
+Binds the issues in <dir>/<folder>_<year>/ into one PDF per quarter with a bookmark per issue,
+<out>/<folder>/<title> <year>, янв–март.pdf etc. A quarter is bound once all of its issues listed in the
+folder's .results.json are there. Tomes that already exist are skipped.
+
+Options:
+  -o, --out <dir>       Output directory (required, not the input dir)
+  -y, --years <y>       Year or range of the folders to bind (default: 1901-1918)
   -h, --help            Show this help`
 
 const RESULTS_VERSION = 4
@@ -355,6 +370,34 @@ async function ocrMain(args) {
   return failed ? 1 : 0
 }
 
+async function bindMain(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      out: { type: 'string', short: 'o' },
+      years: { type: 'string', short: 'y', default: '1901-1918' },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+  })
+
+  if (values.help) {
+    console.log(BIND_USAGE)
+    return 0
+  }
+
+  if (positionals.length !== 1 || !values.out) throw new UsageError('Provide the input dir and --out')
+  const inDir = path.resolve(positionals[0])
+  const outDir = path.resolve(values.out)
+  if (inDir === outDir) throw new UsageError('--out must be a different directory than the input dir')
+
+  await fs.mkdir(outDir, { recursive: true })
+  setLogFile(path.join(outDir, 'nlr-bind.log'))
+
+  const { failed } = await runBind({ inDir, outDir, years: parseYears(values.years) })
+  return failed ? 1 : 0
+}
+
 process.umask(0o002) // group-writable files, e.g. for a shared/synced downloads folder
 
 process.on('SIGINT', () => {
@@ -362,13 +405,14 @@ process.on('SIGINT', () => {
   process.exit(130)
 })
 
-const isOcr = process.argv[2] === 'ocr'
+const commands = { ocr: [ocrMain, OCR_USAGE], bind: [bindMain, BIND_USAGE] }
+const [command, commandUsage] = commands[process.argv[2]] ?? []
 
-;(isOcr ? ocrMain(process.argv.slice(3)) : main()).then(
+;(command ? command(process.argv.slice(3)) : main()).then(
   (code) => process.exit(code),
   (err) => {
     const isUsageError = err instanceof UsageError || err.code?.startsWith('ERR_PARSE_ARGS')
-    console.error(isUsageError ? `${err.message}\n\n${isOcr ? OCR_USAGE : USAGE}` : err)
+    console.error(isUsageError ? `${err.message}\n\n${commandUsage ?? USAGE}` : err)
     process.exit(2)
   },
 )

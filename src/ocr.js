@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { abbyyProcesses, checkSettings, runFineReader } from './finereader.js'
+import { readResults, writeResults } from './files.js'
 import { graftOcrText, splitPdf } from './graft.js'
 import { error, log, warn } from './log.js'
 
@@ -240,6 +241,10 @@ async function findIssues(inDir, outDir, years) {
   for (const dir of await fs.readdir(inDir, { withFileTypes: true })) {
     const year = Number(dir.name.match(/_(\d{4})$/)?.[1])
     if (!dir.isDirectory() || !years.includes(year)) continue
+
+    // The list of the folder's issues goes along, so `nlr bind` can tell when a quarter is complete
+    const results = await readResults(path.join(inDir, dir.name))
+    if (results) await writeResults(path.join(outDir, dir.name), results)
 
     for (const name of await fs.readdir(path.join(inDir, dir.name))) {
       if (!name.endsWith('.pdf') || name.startsWith('.')) continue
