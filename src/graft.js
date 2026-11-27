@@ -74,7 +74,11 @@ export async function graftOcrText(originalBytes, ocrChunks) {
         if (angle >= MIN_ANGLE) {
           const sign = deskewSign(page, angle, ocrBox, textBoxes[i])
           // Too small a tilt to measure is also too small to matter: unrotated, the text's corners land this close
-          aligned = sign !== 0 || (angle * Math.hypot(box.width, box.height)) / 2 < MAX_UNROTATED_OFFSET
+          // and without any (horizontal) text there's nothing to be off
+          aligned =
+            sign !== 0 ||
+            (angle * Math.hypot(box.width, box.height)) / 2 < MAX_UNROTATED_OFFSET ||
+            textBoxes[i].length === 0
           angle *= sign
         } else angle = 0
       }
@@ -154,7 +158,8 @@ function deskewAngle(box, ocrBox, pageNumber) {
 /**
  * Direction of the deskew rotation: 1, -1, or 0 if unclear. FineReader's text boxes are straight on the deskewed page; turned
  * back the right way they land on the ink of the original scan, the wrong way they slide off it. The unrotated boxes have to
- * score in between, otherwise the measurement isn't about the tilt.
+ * score below the best, otherwise the measurement isn't about the tilt. They may score as low as the wrong way: once the boxes
+ * are off the text lines, by θ or by 2θ, they only catch stray ink.
  */
 function deskewSign(page, angle, ocrBox, boxes) {
   const scan = pageScan(page)
@@ -164,7 +169,7 @@ function deskewSign(page, angle, ocrBox, boxes) {
   const best = Math.max(plus, minus)
   const worst = Math.min(plus, minus)
 
-  if (best < worst * (1 + MIN_SIGN_MARGIN) || none <= worst || none >= best) return 0
+  if (best < worst * (1 + MIN_SIGN_MARGIN) || none >= best) return 0
   return plus > minus ? 1 : -1
 }
 
