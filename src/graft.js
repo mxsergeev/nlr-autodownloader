@@ -18,6 +18,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 const MIN_SIGN_MARGIN = 0.03
 const MIN_ANGLE = 0.0001 // radians (0.006°); below this the rotation is too small to matter
 const MAX_ANGLE = (3 * Math.PI) / 180
+const MAX_UNROTATED_OFFSET = 2 // points; a line of text is 8–10
 
 /** Split a PDF into PDFs of pagesPerChunk pages. Pages are copied as they are: image streams keep their bytes. */
 export async function splitPdf(bytes, pagesPerChunk) {
@@ -41,7 +42,8 @@ export async function splitPdf(bytes, pagesPerChunk) {
  * ocrChunks are FineReader's output for splitPdf(original) in order. FineReader deskews before recognizing, so its text sits on
  * the straightened page: its page is the bounding box of the original rotated by the deskew angle. The angle comes from the two
  * page sizes, its direction from the original scan (see deskewSign), and the text is rotated back onto the original page.
- * If the direction can't be determined the text goes on unrotated (aligned: false), which leaves it a few points off.
+ * If the direction can't be determined the text goes on unrotated, which leaves it a few points off (aligned: false) or, for a
+ * tiny tilt, less than MAX_UNROTATED_OFFSET (aligned: true).
  * A page printed sideways is also turned upright by FineReader (CorrectOrientation); see turnedAngle.
  *
  * @returns {Promise<{ bytes: Uint8Array, pages: { angle: number, aligned: boolean }[] }>} angle in degrees
@@ -71,7 +73,8 @@ export async function graftOcrText(originalBytes, ocrChunks) {
         angle = deskewAngle(box, ocrBox, index)
         if (angle >= MIN_ANGLE) {
           const sign = deskewSign(page, angle, ocrBox, textBoxes[i])
-          aligned = sign !== 0
+          // Too small a tilt to measure is also too small to matter: unrotated, the text's corners land this close
+          aligned = sign !== 0 || (angle * Math.hypot(box.width, box.height)) / 2 < MAX_UNROTATED_OFFSET
           angle *= sign
         } else angle = 0
       }
