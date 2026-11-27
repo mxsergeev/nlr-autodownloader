@@ -17,7 +17,6 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 // A sign is only trusted if the ink inside FineReader's text boxes differs by at least this much between the two directions
 const MIN_SIGN_MARGIN = 0.03
 const MIN_ANGLE = 0.0001 // radians (0.006°); below this the rotation is too small to matter
-const MAX_ANGLE = (3 * Math.PI) / 180
 const MAX_UNROTATED_OFFSET = 2 // points; a line of text is 8–10
 
 /** Split a PDF into PDFs of pagesPerChunk pages. Pages are copied as they are: image streams keep their bytes. */
@@ -145,7 +144,7 @@ function deskewAngle(box, ocrBox, pageNumber) {
   const sin = (W * ocrBox.height - H * ocrBox.width) / det
   const angle = Math.atan2(sin, cos)
 
-  if (Math.abs(cos * cos + sin * sin - 1) > 0.002 || angle < -MIN_ANGLE || angle > MAX_ANGLE) {
+  if (Math.abs(cos * cos + sin * sin - 1) > 0.002 || angle < -MIN_ANGLE) {
     throw new Error(
       `Page ${pageNumber}: FineReader's page (${ocrBox.width.toFixed(1)}×${ocrBox.height.toFixed(1)}) ` +
         `doesn't match the original (${W.toFixed(1)}×${H.toFixed(1)})`,
