@@ -42,6 +42,7 @@ export async function splitPdf(bytes, pagesPerChunk) {
  * the straightened page: its page is the bounding box of the original rotated by the deskew angle. The angle comes from the two
  * page sizes, its direction from the original scan (see deskewSign), and the text is rotated back onto the original page.
  * If the direction can't be determined the text goes on unrotated (aligned: false), which leaves it a few points off.
+ * A page printed sideways is also turned upright by FineReader (CorrectOrientation); see turnedAngle.
  *
  * @returns {Promise<{ bytes: Uint8Array, pages: { angle: number, aligned: boolean }[] }>} angle in degrees
  */
@@ -62,14 +63,18 @@ export async function graftOcrText(originalBytes, ocrChunks) {
 
       const box = page.getMediaBox()
       const ocrBox = ocrPage.getMediaBox()
-      let angle = deskewAngle(box, ocrBox, index)
+      let angle
       let aligned = true
 
-      if (Math.abs(angle) >= MIN_ANGLE) {
-        const sign = deskewSign(page, angle, ocrBox, textBoxes[i])
-        aligned = sign !== 0
-        angle *= sign
-      } else angle = 0
+      if (isTurned(box, ocrBox)) ({ angle, aligned } = turnedAngle(page, ocrBox, textBoxes[i], index))
+      else {
+        angle = deskewAngle(box, ocrBox, index)
+        if (angle >= MIN_ANGLE) {
+          const sign = deskewSign(page, angle, ocrBox, textBoxes[i])
+          aligned = sign !== 0
+          angle *= sign
+        } else angle = 0
+      }
 
       const form = textForm(doc, ocrPage)
 
@@ -160,6 +165,27 @@ function deskewSign(page, angle, ocrBox, boxes) {
   return plus > minus ? 1 : -1
 }
 
+/** FineReader turned the page a quarter: one of the two pages is portrait, the other landscape. */
+const isTurned = (box, ocrBox) => (box.width - box.height) * (ocrBox.width - ocrBox.height) < 0
+
+/**
+ * Rotation from FineReader's page back onto a page it turned upright: a quarter turn either way plus the deskew, either way.
+ * The candidate whose text boxes land on the most ink wins; it is aligned if it clearly beats all the others.
+ */
+function turnedAngle(page, ocrBox, boxes, pageNumber) {
+  // Turning the original a quarter swaps its sides, so with FineReader's page swapped back what's left is the deskew
+  const deskew = deskewAngle(page.getMediaBox(), { width: ocrBox.height, height: ocrBox.width }, pageNumber)
+  const scan = pageScan(page)
+  if (!scan || boxes.length === 0) throw new Error(`Page ${pageNumber}: can't tell which way FineReader turned it`)
+
+  const candidates = [Math.PI / 2, -Math.PI / 2]
+    .flatMap((quarter) => (deskew >= MIN_ANGLE ? [quarter + deskew, quarter - deskew] : [quarter]))
+    .map((angle) => ({ angle, ink: inkInBoxes(scan, page.getMediaBox(), ocrBox, boxes, angle) }))
+    .sort((a, b) => b.ink - a.ink)
+
+  return { angle: candidates[0].angle, aligned: candidates[0].ink >= candidates[1].ink * (1 + MIN_SIGN_MARGIN) }
+}
+
 /** Mean darkness (0–255) of the original scan inside the text boxes, mapped from FineReader's page rotated by angle. */
 function inkInBoxes(scan, box, ocrBox, boxes, angle) {
   const cos = Math.cos(angle)
@@ -170,6 +196,7 @@ function inkInBoxes(scan, box, ocrBox, boxes, angle) {
   const sy = scan.height / box.height
   const clampX = (v) => Math.min(scan.width, Math.max(0, Math.round(v)))
   const clampY = (v) => Math.min(scan.height, Math.max(0, Math.round(v)))
+  const quarterTurn = Math.abs(sin) > Math.SQRT1_2 // a text box turned a quarter stands upright on the original
   let ink = 0
   let area = 0
 
@@ -178,11 +205,12 @@ function inkInBoxes(scan, box, ocrBox, boxes, angle) {
     const dy = b.y + b.height / 2 - oy
     const x = cos * dx - sin * dy + cx - box.x
     const top = box.y + box.height - (sin * dx + cos * dy + cy) // distance from the top edge, as the image rows go
+    const [width, height] = quarterTurn ? [b.height, b.width] : [b.width, b.height]
 
-    const x0 = clampX((x - b.width / 2) * sx)
-    const x1 = clampX((x + b.width / 2) * sx)
-    const y0 = clampY((top - b.height / 2) * sy)
-    const y1 = clampY((top + b.height / 2) * sy)
+    const x0 = clampX((x - width / 2) * sx)
+    const x1 = clampX((x + width / 2) * sx)
+    const y0 = clampY((top - height / 2) * sy)
+    const y1 = clampY((top + height / 2) * sy)
 
     for (let row = y0; row < y1; row++) {
       for (let col = x0, i = row * scan.width + x0; col < x1; col++, i++) ink += 255 - scan.pixels[i]
