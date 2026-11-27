@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // A small web page to watch and control the OCR work: starts and stops `nlr ocr` and the Nextcloud transport, shows their
-// progress and logs, and changes FineReader's limits while it runs (through a settings file both of them re-read).
+// progress and logs, and changes FineReader's limits and the order of the folders while it runs (through a settings file
+// both of them re-read).
 import { execFile, spawn } from 'child_process'
 import { promises as fs } from 'fs'
 import http from 'http'
@@ -8,6 +9,7 @@ import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { parseArgs, promisify } from 'util'
+import { orderFolders } from '../src/files.js'
 import { parseLimits } from '../src/ocr.js'
 
 const USAGE = `Usage:
@@ -85,13 +87,25 @@ async function readSettings() {
   return { ...DEFAULT_SETTINGS, ...saved }
 }
 
+/** Change some settings, keep the others. Written whole and then renamed, so nlr ocr and the transport never read half. */
+async function writeSettings(changes) {
+  const settings = { ...(await readSettings()), ...changes }
+  await fs.writeFile(files.settings + '.tmp', JSON.stringify(settings, null, 2))
+  await fs.rename(files.settings + '.tmp', files.settings)
+  return settings
+}
+
 async function saveSettings(input) {
   const limits = parseLimits(input) // throws with a readable message
   const ahead = Number(input.ahead)
   if (!Number.isInteger(ahead) || ahead < 1 || ahead > 20) throw new Error('ahead must be a whole number from 1 to 20')
-  const settings = { ...limits, night: limits.night.join('-'), ahead }
-  await fs.writeFile(files.settings, JSON.stringify(settings, null, 2))
-  return settings
+  return writeSettings({ ...limits, night: limits.night.join('-'), ahead })
+}
+
+async function saveOrder({ order }) {
+  if (!Array.isArray(order) || !order.every((folder) => typeof folder === 'string'))
+    throw new Error('order must be a list of folder names')
+  return writeSettings({ order })
 }
 
 async function tail(file) {
@@ -120,6 +134,12 @@ async function status() {
   const hour = new Date().getHours()
   const night = from <= to ? hour >= from && hour < to : hour >= from || hour < to
   const disk = await fs.statfs(dirs.in).catch(() => null)
+  const transport = JSON.parse(await fs.readFile(files.status, 'utf8').catch(() => 'null'))
+  if (transport) {
+    // In the order they'll be worked on, which may have changed since the transport's last round
+    const names = orderFolders(Object.keys(transport.folders), settings.order)
+    transport.folders = Object.fromEntries(names.map((name) => [name, transport.folders[name]]))
+  }
 
   return {
     processes: Object.fromEntries(
@@ -137,7 +157,7 @@ async function status() {
       freeDisk: disk && disk.bavail * disk.bsize,
       finereader: await finereader().catch(() => null),
     },
-    transport: JSON.parse(await fs.readFile(files.status, 'utf8').catch(() => 'null')),
+    transport,
     logs: { ocr: await tail(files.ocrLog), transport: await tail(files.transportLog) },
     dirs,
   }
@@ -168,11 +188,12 @@ const server = http.createServer(async (req, res) => {
       await (action[1] === 'start' ? start : stop)(action[2])
       return json(res, 200, { ok: true })
     }
-    if (req.method === 'POST' && url.pathname === '/api/settings') {
+    const save = req.method === 'POST' && { '/api/settings': saveSettings, '/api/order': saveOrder }[url.pathname]
+    if (save) {
       let body = ''
       for await (const chunk of req) body += chunk
       try {
-        return json(res, 200, await saveSettings(JSON.parse(body)))
+        return json(res, 200, await save(JSON.parse(body)))
       } catch (err) {
         return json(res, 400, { error: err.message })
       }

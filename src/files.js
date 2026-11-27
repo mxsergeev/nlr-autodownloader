@@ -35,6 +35,12 @@ export function searchDirName({ q, year }) {
   return `${q}_${year}`.trim().replace(/\s+/g, '_').replace(/[/\\]/g, '_')
 }
 
+/** Folders sorted as in order (folder names), the ones not in it after those, by name. */
+export function orderFolders(folders, order = []) {
+  const rank = (folder) => (order.includes(folder) ? order.indexOf(folder) : order.length)
+  return [...folders].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+}
+
 /** @returns {Promise<{ version?: number, url?: string, total: number, items: { fileName: string }[] } | null>} */
 export async function readResults(dir) {
   try {

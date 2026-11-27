@@ -9,7 +9,7 @@ import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { parseArgs } from 'util'
 import { bindFolder } from '../src/bind.js'
-import { readResults, truncateFileName } from '../src/files.js'
+import { orderFolders, readResults, truncateFileName } from '../src/files.js'
 import { error, log, setLogFile, warn } from '../src/log.js'
 
 const USAGE = `Usage:
@@ -21,8 +21,9 @@ const USAGE = `Usage:
   --remote <dir>        Folder on Nextcloud with the originals; tomes go to <remote>/ocr/ (default: nlr)
   --credentials <file>  JSON with url, user, password (default: ~/.nextcloud-dav.json)
   --years <y>           Year or range of the folders (default: 1901-1918)
-  --ahead <n>           Download a folder only while fewer than n folders wait for OCR (default: 2)
-  --settings <file>     JSON re-read every round; its "ahead" overrides --ahead
+  --ahead <n>           Download a folder only while fewer than n folders before it wait for OCR (default: 2)
+  --settings <file>     JSON re-read every round; its "ahead" overrides --ahead, its "order" (folder names) says which
+                        folders go first, the rest go by name
   --watch               Keep going, a round every minute, instead of stopping after one round`
 
 const GB = 2 ** 30
@@ -309,7 +310,10 @@ async function main() {
         if (entry.isDirectory()) localFolders.add(entry.name)
       }
     }
-    const folders = [...new Set([...remoteFolders, ...localFolders])].filter(inYears).sort()
+    const folders = orderFolders(
+      [...new Set([...remoteFolders, ...localFolders])].filter(inYears),
+      Array.isArray(settings.order) ? settings.order : [],
+    )
 
     const states = {}
     for (const folder of folders) {
@@ -371,9 +375,11 @@ async function main() {
       if (entry.step === 'done' && localFolders.has(folder)) await step(folder, 'done', () => cleanUp(folder))
     }
 
-    // Keep up to `ahead` folders waiting for OCR; the next one is downloaded when there are fewer
-    const waitingForOcr = folders.filter((folder) => status.folders[folder].step === 'ocr').length
-    const next = folders.find((folder) => status.folders[folder].step === 'waiting')
+    // Keep up to `ahead` folders waiting for OCR before the next one, which is downloaded when there are fewer.
+    // Folders ordered after it don't count: they'll be OCRed after it anyway.
+    const nextIndex = folders.findIndex((folder) => status.folders[folder].step === 'waiting')
+    const next = folders[nextIndex]
+    const waitingForOcr = folders.slice(0, nextIndex).filter((folder) => status.folders[folder].step === 'ocr').length
     if (next && waitingForOcr < ahead) {
       await step(next, 'downloading', () => download(next, states[next]))
       status.folders[next].step = 'ocr'

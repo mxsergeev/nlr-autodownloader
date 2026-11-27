@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { setTimeout as sleep } from 'timers/promises'
 import { abbyyProcesses, checkSettings, runFineReader } from './finereader.js'
-import { readResults, writeResults } from './files.js'
+import { orderFolders, readResults, writeResults } from './files.js'
 import { graftOcrText, splitPdf } from './graft.js'
 import { error, log, warn } from './log.js'
 
@@ -23,7 +23,8 @@ const TMP_DIR = '.ocr-tmp'
  * `chunk` pages; its text is put onto the original pages (see graft.js), so the scans stay as they are. Files that already exist
  * in outDir are skipped. FineReader may use dayRam GB and the first dayCpus CPUs, or nightRam GB and nightCpus CPUs between
  * night[0] and night[1] h. A settings file (JSON with any of dayRam, nightRam, dayCpus, nightCpus, night: "0-8") is re-read every
- * few seconds and overrides these. With watch, it keeps looking for new files every few minutes instead of stopping.
+ * few seconds and overrides these; its order (folder names) says which folders go first, the rest go by name. With watch, it
+ * keeps looking for new files every few minutes instead of stopping; failed files are tried again when there's nothing else.
  *
  * @returns {Promise<{ done: number, failed: number }>}
  */
@@ -37,12 +38,14 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
   const queue = [] // jobs waiting for FineReader
   const running = new Set()
   const taken = new Set() // output files of this run: done, in progress or failed
+  const failed = new Set() // output files to try again once there's nothing else to do (watch only)
   const counts = { done: 0, failed: 0 }
   let measured = { ram: 0, gui: false }
   let lastCheck = 0
   let lastMode = null
   let limits = initialLimits
   let settingsText = null
+  let order = []
   let guiWarned = false
   let grafting = Promise.resolve() // one graft at a time: it is CPU and memory heavy
   let nextId = 0
@@ -67,7 +70,10 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
     if (text === null || text === settingsText) return
     settingsText = text
     try {
-      const updated = parseLimits(JSON.parse(text), limits)
+      const settings = JSON.parse(text)
+      order = Array.isArray(settings.order) ? settings.order : []
+      sortPending()
+      const updated = parseLimits(settings, limits)
       if (JSON.stringify(updated) === JSON.stringify(limits)) return
       limits = updated
       lastMode = null // log the limits again
@@ -77,10 +83,17 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
   }
   const jobRam = JOB_RAM + chunk * PAGE_RAM // the last chunk of an issue may be smaller; close enough
 
+  /** Issues not started yet by their folder's place in order; within a folder they stay as they are. */
+  function sortPending() {
+    const folders = orderFolders(new Set(pending.map((issue) => issue.folder)), order)
+    pending.sort((a, b) => folders.indexOf(a.folder) - folders.indexOf(b.folder))
+  }
+
   async function scan() {
     const found = (await findIssues(inDir, outDir, years)).filter((issue) => !taken.has(issue.out))
     for (const issue of found) taken.add(issue.out)
     pending.push(...found)
+    sortPending()
     if (found.length) log(`${found.length} file(s) to OCR`)
   }
 
@@ -175,7 +188,7 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
   function fail(issue, err) {
     issue.error = err
     counts.failed++
-    if (watch) taken.delete(issue.out) // the next scan picks it up again
+    if (watch) failed.add(issue.out)
     error(
       `[${issue.folder}] Not OCRed: ${issue.name}: ${err.message}. ${watch ? 'Trying again later.' : 'Re-run to try again.'}`,
     )
@@ -245,16 +258,23 @@ export async function runOcr({ inDir, outDir, years, chunk, limits: initialLimit
   }
 
   await scan()
+  let lastScan = Date.now()
   for (;;) {
     await check()
     await fill()
 
-    if (running.size === 0 && queue.length === 0 && pending.length === 0) {
-      await grafting
-      if (!watch) break
-      await sleep(RESCAN_MS)
+    const idle = running.size === 0 && queue.length === 0 && pending.length === 0
+    if (idle) await grafting
+    if (idle && !watch) break
+
+    // Also while busy, so new downloads can go first if their folders are ordered first
+    if (watch && Date.now() - lastScan >= RESCAN_MS) {
+      if (idle) {
+        for (const out of failed) taken.delete(out) // the scan picks them up again
+        failed.clear()
+      }
       await scan()
-      continue
+      lastScan = Date.now()
     }
     await sleep(1000)
   }

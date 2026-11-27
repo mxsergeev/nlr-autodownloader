@@ -107,6 +107,23 @@
       #error {
         color: #c00;
       }
+      tr[draggable] {
+        cursor: grab;
+        user-select: none;
+      }
+      td.handle {
+        color: #aaa;
+        padding-right: 0;
+      }
+      tr.selected td {
+        background: #dbe8ff;
+      }
+      tr.drop-before td {
+        border-top: 2px solid #37c;
+      }
+      tr.drop-after td {
+        border-bottom: 2px solid #37c;
+      }
     </style>
   </head>
   <body>
@@ -138,6 +155,7 @@
       <table>
         <thead>
           <tr>
+            <th></th>
             <th>Folder</th>
             <th>Step</th>
             <th class="num">Issues</th>
@@ -150,6 +168,10 @@
         </thead>
         <tbody id="folders"></tbody>
       </table>
+      <p class="muted">
+        The folders are worked on from the top. Drag rows by ⠿ to change the order; click to select, Shift-click to
+        select a range, Ctrl-click to add one, then drag them together. <span id="order-saved"></span>
+      </p>
     </section>
 
     <div class="grid">
@@ -181,6 +203,11 @@
         'no issue list': 'no issue list',
       }
       let settingsLoaded = false
+      let movable = [] // folders not done yet, as shown
+      const selected = new Set()
+      let lastClicked = null
+      let dragging = false
+      let drop = null // { row, after }
 
       async function post(url, body) {
         const res = await fetch(url, {
@@ -239,15 +266,24 @@
           ? `${x.action === 'upload' ? 'Uploading' : 'Downloading'} ${x.name}: ${gb(x.bytes)} of ${gb(x.size)}`
           : ''
 
-        $('folders').innerHTML = folders
+        // Finished folders on top, then the rest in the order they're worked on, which can be changed by dragging
+        const finished = folders.filter(([, f]) => f.step === 'done')
+        const rest = folders.filter(([, f]) => f.step !== 'done')
+        movable = rest.map(([name]) => name)
+        $('folders').innerHTML = [...finished, ...rest]
           .map(([name, f]) => {
             const share = f.listed ? f.ocred / f.listed : 0
-            const ocr =
-              f.step === 'done'
-                ? ''
-                : `<span class="bar"><div style="width:${(share * 100).toFixed(0)}%"></div></span> ${f.ocred}/${f.listed}`
+            const done = f.step === 'done'
+            const ocr = done
+              ? ''
+              : `<span class="bar"><div style="width:${(share * 100).toFixed(0)}%"></div></span> ${f.ocred}/${f.listed}`
+            const row = done
+              ? '<tr><td></td>'
+              : `<tr draggable="true" data-folder="${escape(name)}" class="${selected.has(name) ? 'selected' : ''}">` +
+                '<td class="handle">⠿</td>'
             return (
-              `<tr><td>${escape(name)}</td><td class="${f.step === 'done' ? 'done' : ''}">${escape(STEPS[f.step] ?? f.step)}</td>` +
+              row +
+              `<td>${escape(name)}</td><td class="${done ? 'done' : ''}">${escape(STEPS[f.step] ?? f.step)}</td>` +
               `<td class="num">${f.step === 'done' && !f.listed ? '' : f.listed}</td><td class="num">${f.originals || ''}</td>` +
               `<td>${ocr}</td><td class="num">${f.tomes || ''}</td><td class="num">${f.uploaded ?? ''}</td>` +
               `<td class="note">${escape(f.note)}</td></tr>`
@@ -271,7 +307,8 @@
       async function refresh() {
         try {
           const res = await fetch('/api/status')
-          render(await res.json())
+          const s = await res.json()
+          if (!dragging) render(s) // a new table would pull the rows from under the mouse
           $('error').textContent = ''
         } catch (err) {
           $('error').textContent = `Can't reach the UI server: ${err.message}`
@@ -282,11 +319,91 @@
         event.preventDefault()
         try {
           const saved = await post('/api/settings', Object.fromEntries(new FormData(event.target)))
-          for (const [key, value] of Object.entries(saved)) event.target.elements[key].value = value
+          for (const [key, value] of Object.entries(saved)) {
+            const input = event.target.elements[key]
+            if (input) input.value = value
+          }
           $('saved').textContent = 'Saved ' + new Date().toLocaleTimeString()
         } catch (err) {
           $('saved').textContent = err.message
         }
+      })
+
+      const tbody = $('folders')
+      const markSelected = () => {
+        for (const row of tbody.querySelectorAll('tr[draggable]'))
+          row.classList.toggle('selected', selected.has(row.dataset.folder))
+      }
+      const setDrop = (target) => {
+        drop?.row.classList.remove('drop-before', 'drop-after')
+        drop = target
+        drop?.row.classList.add(drop.after ? 'drop-after' : 'drop-before')
+      }
+
+      tbody.addEventListener('click', (event) => {
+        const row = event.target.closest('tr[draggable]')
+        if (!row) return
+        const name = row.dataset.folder
+        if (event.shiftKey && movable.includes(lastClicked)) {
+          const [from, to] = [movable.indexOf(lastClicked), movable.indexOf(name)].sort((a, b) => a - b)
+          for (const folder of movable.slice(from, to + 1)) selected.add(folder)
+        } else if (event.ctrlKey || event.metaKey) {
+          if (!selected.delete(name)) selected.add(name)
+          lastClicked = name
+        } else {
+          const onlyThis = selected.size === 1 && selected.has(name)
+          selected.clear()
+          if (!onlyThis) selected.add(name)
+          lastClicked = name
+        }
+        markSelected()
+      })
+
+      tbody.addEventListener('dragstart', (event) => {
+        const name = event.target.closest('tr[draggable]').dataset.folder
+        if (!selected.has(name)) {
+          selected.clear()
+          selected.add(name)
+          lastClicked = name
+          markSelected()
+        }
+        dragging = true
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', [...selected].join('\n'))
+      })
+
+      tbody.addEventListener('dragover', (event) => {
+        const row = event.target.closest('tr[draggable]')
+        if (!row || !dragging) return
+        event.preventDefault()
+        const box = row.getBoundingClientRect()
+        const after = event.clientY > box.top + box.height / 2
+        if (drop?.row !== row || drop.after !== after) setDrop({ row, after })
+      })
+
+      tbody.addEventListener('drop', async (event) => {
+        event.preventDefault()
+        const target = drop && { name: drop.row.dataset.folder, after: drop.after }
+        setDrop(null)
+        dragging = false
+        if (!target || selected.has(target.name)) return
+
+        // The selected folders go together, in their order, before or after the row they were dropped on
+        const moving = movable.filter((folder) => selected.has(folder))
+        const order = movable.filter((folder) => !selected.has(folder))
+        order.splice(order.indexOf(target.name) + (target.after ? 1 : 0), 0, ...moving)
+        try {
+          await post('/api/order', { order })
+          $('order-saved').textContent = 'Order saved ' + new Date().toLocaleTimeString()
+        } catch (err) {
+          $('order-saved').textContent = err.message
+        }
+        refresh()
+      })
+
+      tbody.addEventListener('dragend', () => {
+        setDrop(null)
+        dragging = false
       })
 
       refresh()
